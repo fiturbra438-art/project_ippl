@@ -47,7 +47,11 @@ class _PosScreenState extends State<PosScreen> {
               child: DropdownButtonHideUnderline(
                 child: DropdownButton<int>(
                   value: pos.activeUnitId,
-                  items: context.watch<UsahaProvider>().daftarUsaha.map((u) {
+                  items: context
+                      .watch<UsahaProvider>()
+                      .daftarUsaha
+                      .where((u) => u.hasPos) // Hanya unit yang mengaktifkan fitur kasir
+                      .map((u) {
                     return DropdownMenuItem<int>(
                       value: u.id,
                       child: Text('📍 ${u.nama}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryBlue)),

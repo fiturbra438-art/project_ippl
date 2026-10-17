@@ -8,6 +8,7 @@ class UsahaModel {
   final double pengeluaranBulanIni;
   final double pertumbuhanPersen;
   final bool status;
+  final bool hasPos; // true = pakai kasir POS (kafe, toko retail), false = tidak pakai POS (gudang pusat, distribusi grosir, kantor)
 
   UsahaModel({
     required this.id,
@@ -19,6 +20,7 @@ class UsahaModel {
     required this.pengeluaranBulanIni,
     required this.pertumbuhanPersen,
     this.status = true,
+    this.hasPos = true,
   });
 
   double get labaBersih => pendapatanBulanIni - pengeluaranBulanIni;

@@ -220,7 +220,28 @@ class UsahaScreen extends StatelessWidget {
                   ],
                 ),
               ),
-              _buildTag(usaha.kategoriPortofolio),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  _buildTag(usaha.kategoriPortofolio),
+                  const SizedBox(height: 4),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: usaha.hasPos ? AppTheme.lightGreenBg : const Color(0xFFF1F5F9),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      usaha.hasPos ? 'POS Aktif' : 'Non-POS (Gudang)',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: usaha.hasPos ? AppTheme.accentGreen : AppTheme.textSecondary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
           const Divider(color: AppTheme.cardBorder),
@@ -235,20 +256,47 @@ class UsahaScreen extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              OutlinedButton.icon(
-                onPressed: () {
-                  context.read<PosProvider>().setActiveUnit(usaha.id, usaha.nama);
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const PosScreen()));
-                },
-                icon: const Icon(Icons.point_of_sale_rounded, size: 16),
-                label: const Text('Buka Kasir POS Unit Ini', style: TextStyle(fontSize: 12)),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppTheme.primaryBlue,
-                  side: const BorderSide(color: AppTheme.secondaryBlue),
+              if (usaha.hasPos)
+                OutlinedButton.icon(
+                  onPressed: () {
+                    context.read<PosProvider>().setActiveUnit(usaha.id, usaha.nama);
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => const PosScreen()));
+                  },
+                  icon: const Icon(Icons.point_of_sale_rounded, size: 16),
+                  label: const Text('Buka Kasir POS', style: TextStyle(fontSize: 12)),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppTheme.primaryBlue,
+                    side: const BorderSide(color: AppTheme.secondaryBlue),
+                  ),
+                )
+              else
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(color: const Color(0xFFF1F5F9), borderRadius: BorderRadius.circular(8)),
+                  child: Row(
+                    children: const [
+                      Icon(Icons.inventory_2_outlined, size: 14, color: AppTheme.textSecondary),
+                      SizedBox(width: 6),
+                      Text('Unit Tanpa Kasir', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.bold)),
+                    ],
+                  ),
                 ),
-              ),
               Row(
                 children: [
+                  IconButton(
+                    tooltip: usaha.hasPos ? 'Matikan Fitur Kasir' : 'Aktifkan Fitur Kasir',
+                    icon: Icon(
+                      usaha.hasPos ? Icons.point_of_sale_rounded : Icons.money_off_csred_rounded,
+                      size: 20,
+                      color: usaha.hasPos ? AppTheme.primaryBlue : AppTheme.textMuted,
+                    ),
+                    onPressed: () {
+                      context.read<UsahaProvider>().toggleHasPos(usaha.id);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Status kasir untuk ${usaha.nama} diubah.')),
+                      );
+                    },
+                  ),
                   IconButton(
                     tooltip: 'Hapus Unit Usaha',
                     icon: const Icon(Icons.delete_outline_rounded, size: 20, color: Color(0xFFDC2626)),
@@ -256,7 +304,7 @@ class UsahaScreen extends StatelessWidget {
                   ),
                   TextButton(
                     onPressed: () {},
-                    child: const Text('Detail Analitik', style: TextStyle(color: AppTheme.primaryBlue, fontSize: 13)),
+                    child: const Text('Detail', style: TextStyle(color: AppTheme.primaryBlue, fontSize: 13)),
                   ),
                 ],
               ),
@@ -296,18 +344,33 @@ class UsahaScreen extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              OutlinedButton.icon(
-                onPressed: () {
-                  context.read<PosProvider>().setActiveUnit(usaha.id, usaha.nama);
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const PosScreen()));
-                },
-                icon: const Icon(Icons.point_of_sale_rounded, size: 16),
-                label: const Text('Buka Kasir', style: TextStyle(fontSize: 12)),
-              ),
-              IconButton(
-                tooltip: 'Hapus Unit Usaha',
-                icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFDC2626)),
-                onPressed: () => _konfirmasiHapusUsaha(context, usaha),
+              if (usaha.hasPos)
+                OutlinedButton.icon(
+                  onPressed: () {
+                    context.read<PosProvider>().setActiveUnit(usaha.id, usaha.nama);
+                    Navigator.push(context, MaterialPageRoute(builder: (_) => const PosScreen()));
+                  },
+                  icon: const Icon(Icons.point_of_sale_rounded, size: 16),
+                  label: const Text('Kasir POS', style: TextStyle(fontSize: 12)),
+                )
+              else
+                const Text('Tanpa Kasir', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+              Row(
+                children: [
+                  IconButton(
+                    tooltip: usaha.hasPos ? 'Matikan Kasir' : 'Aktifkan Kasir',
+                    icon: Icon(
+                      usaha.hasPos ? Icons.point_of_sale_rounded : Icons.money_off_csred_rounded,
+                      color: usaha.hasPos ? AppTheme.primaryBlue : AppTheme.textMuted,
+                    ),
+                    onPressed: () => context.read<UsahaProvider>().toggleHasPos(usaha.id),
+                  ),
+                  IconButton(
+                    tooltip: 'Hapus Unit Usaha',
+                    icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFDC2626)),
+                    onPressed: () => _konfirmasiHapusUsaha(context, usaha),
+                  ),
+                ],
               ),
             ],
           ),
@@ -391,58 +454,92 @@ class UsahaScreen extends StatelessWidget {
     final jenisCtrl = TextEditingController();
     final lokasiCtrl = TextEditingController();
     String selectedKategori = 'Star';
+    bool usePos = true;
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Tambah Unit Usaha Baru', style: TextStyle(fontWeight: FontWeight.bold)),
-        content: SizedBox(
-          width: 400,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: namaCtrl,
-                decoration: const InputDecoration(labelText: 'Nama Usaha', border: OutlineInputBorder()),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: jenisCtrl,
-                decoration: const InputDecoration(labelText: 'Jenis Usaha (misal: F&B, Jasa)', border: OutlineInputBorder()),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: lokasiCtrl,
-                decoration: const InputDecoration(labelText: 'Lokasi', border: OutlineInputBorder()),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
-          ElevatedButton(
-            onPressed: () {
-              if (namaCtrl.text.isNotEmpty) {
-                final provider = Provider.of<UsahaProvider>(context, listen: false);
-                provider.tambahUsaha(
-                  UsahaModel(
-                    id: DateTime.now().millisecondsSinceEpoch,
-                    nama: namaCtrl.text,
-                    jenisUsaha: jenisCtrl.text,
-                    lokasi: lokasiCtrl.text,
-                    kategoriPortofolio: selectedKategori,
-                    pendapatanBulanIni: 0,
-                    pengeluaranBulanIni: 0,
-                    pertumbuhanPersen: 0,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Tambah Unit Usaha Baru', style: TextStyle(fontWeight: FontWeight.bold)),
+          content: SizedBox(
+            width: 400,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: namaCtrl,
+                  decoration: const InputDecoration(labelText: 'Nama Usaha', border: OutlineInputBorder()),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: jenisCtrl,
+                  decoration: const InputDecoration(labelText: 'Jenis Usaha (misal: F&B, Jasa, Gudang)', border: OutlineInputBorder()),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: lokasiCtrl,
+                  decoration: const InputDecoration(labelText: 'Lokasi / Alamat', border: OutlineInputBorder()),
+                ),
+                const SizedBox(height: 14),
+                // Toggle Pakai Kasir atau Tidak
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppTheme.lightBlueBg,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppTheme.secondaryBlue.withAlpha(40)),
                   ),
-                );
-                Navigator.pop(ctx);
-              }
-            },
-            child: const Text('Simpan'),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Gunakan Mesin Kasir (POS)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                          Text(
+                            usePos ? 'Cocok untuk Kafe, Toko Retail, dll' : 'Cocok untuk Gudang, Pabrik, Distribusi',
+                            style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                          ),
+                        ],
+                      ),
+                      Switch(
+                        value: usePos,
+                        activeThumbColor: AppTheme.accentGreen,
+                        onChanged: (val) => setState(() => usePos = val),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
-        ],
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
+            ElevatedButton(
+              onPressed: () {
+                if (namaCtrl.text.isNotEmpty) {
+                  final provider = Provider.of<UsahaProvider>(context, listen: false);
+                  provider.tambahUsaha(
+                    UsahaModel(
+                      id: DateTime.now().millisecondsSinceEpoch,
+                      nama: namaCtrl.text,
+                      jenisUsaha: jenisCtrl.text,
+                      lokasi: lokasiCtrl.text,
+                      kategoriPortofolio: selectedKategori,
+                      pendapatanBulanIni: 0,
+                      pengeluaranBulanIni: 0,
+                      pertumbuhanPersen: 0,
+                      hasPos: usePos,
+                    ),
+                  );
+                  Navigator.pop(ctx);
+                }
+              },
+              child: const Text('Simpan'),
+            ),
+          ],
+        ),
       ),
     );
   }

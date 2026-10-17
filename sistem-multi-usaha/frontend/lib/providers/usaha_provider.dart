@@ -12,6 +12,7 @@ class UsahaProvider extends ChangeNotifier {
       pendapatanBulanIni: 48500000,
       pengeluaranBulanIni: 31200000,
       pertumbuhanPersen: 14.8,
+      hasPos: true, // Pakai Kasir
     ),
     UsahaModel(
       id: 2,
@@ -22,6 +23,7 @@ class UsahaProvider extends ChangeNotifier {
       pendapatanBulanIni: 32000000,
       pengeluaranBulanIni: 15400000,
       pertumbuhanPersen: 5.2,
+      hasPos: true, // Pakai Kasir
     ),
     UsahaModel(
       id: 3,
@@ -32,6 +34,7 @@ class UsahaProvider extends ChangeNotifier {
       pendapatanBulanIni: 78900000,
       pengeluaranBulanIni: 71000000,
       pertumbuhanPersen: 22.4,
+      hasPos: true, // Pakai Kasir
     ),
     UsahaModel(
       id: 4,
@@ -42,6 +45,7 @@ class UsahaProvider extends ChangeNotifier {
       pendapatanBulanIni: 125000000,
       pengeluaranBulanIni: 98000000,
       pertumbuhanPersen: 8.1,
+      hasPos: false, // Tidak Pakai Kasir (Gudang/Distribusi murni)
     ),
   ];
 
@@ -81,5 +85,25 @@ class UsahaProvider extends ChangeNotifier {
   void hapusUsaha(int id) {
     _daftarUsaha.removeWhere((item) => item.id == id);
     notifyListeners();
+  }
+
+  void toggleHasPos(int id) {
+    final idx = _daftarUsaha.indexWhere((item) => item.id == id);
+    if (idx != -1) {
+      final u = _daftarUsaha[idx];
+      _daftarUsaha[idx] = UsahaModel(
+        id: u.id,
+        nama: u.nama,
+        jenisUsaha: u.jenisUsaha,
+        lokasi: u.lokasi,
+        kategoriPortofolio: u.kategoriPortofolio,
+        pendapatanBulanIni: u.pendapatanBulanIni,
+        pengeluaranBulanIni: u.pengeluaranBulanIni,
+        pertumbuhanPersen: u.pertumbuhanPersen,
+        status: u.status,
+        hasPos: !u.hasPos,
+      );
+      notifyListeners();
+    }
   }
 }
