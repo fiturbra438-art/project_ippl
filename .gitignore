@@ -1,0 +1,27 @@
+# Virtual environments
+venv
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment files
+.env
+*.env.local
+
+# Archives & Temporary files
+*.zip
+.vscode/
+
+# Node / Frontend
+node_modules/
+dist/
+build/
+.next/
+
+# Rust
+target/
