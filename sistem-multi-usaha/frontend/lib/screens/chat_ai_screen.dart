@@ -4,6 +4,7 @@ import '../models/chat_model.dart';
 import '../providers/chat_ai_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
+import '../widgets/app_sidebar.dart';
 import 'dashboard_screen.dart';
 import 'usaha_screen.dart';
 import 'produk_screen.dart';
@@ -59,7 +60,7 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
       drawer: isMobile ? _buildNavigationDrawer(context) : null,
       body: Row(
         children: [
-          if (!isMobile) _buildDesktopSidebar(context),
+          if (!isMobile) const AppSidebar(activeRoute: 'chat_ai'),
           Expanded(
             child: SafeArea(
               child: Padding(

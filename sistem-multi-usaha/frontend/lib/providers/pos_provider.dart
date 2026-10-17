@@ -18,6 +18,8 @@ class PosProvider extends ChangeNotifier {
   MetodeBayar _metodeBayar = MetodeBayar.qris;
   bool _isOfflineMode = false;
   int _offlineQueueCount = 0;
+  int _activeUnitId = 1;
+  String _activeUnitNama = 'Kedai Kopi Bahagia';
 
   // Tutup Shift Data
   double _modalAwal = 500000; // Rp 500.000 kas awal di laci
@@ -29,9 +31,21 @@ class PosProvider extends ChangeNotifier {
   MetodeBayar get metodeBayar => _metodeBayar;
   bool get isOfflineMode => _isOfflineMode;
   int get offlineQueueCount => _offlineQueueCount;
+  int get activeUnitId => _activeUnitId;
+  String get activeUnitNama => _activeUnitNama;
   double get modalAwal => _modalAwal;
   double get totalPenjualanShift => _totalPenjualanShift;
   bool get shiftIsOpen => _shiftIsOpen;
+
+  void setActiveUnit(int unitId, String unitNama) {
+    if (_activeUnitId != unitId) {
+      _activeUnitId = unitId;
+      _activeUnitNama = unitNama;
+      _keranjang.clear();
+      _totalPenjualanShift = 0;
+      notifyListeners();
+    }
+  }
 
   double get subtotal => _keranjang.fold(0, (sum, item) => sum + item.subtotal);
   double get nominalDiskon => (subtotal * _diskonPersen) / 100;

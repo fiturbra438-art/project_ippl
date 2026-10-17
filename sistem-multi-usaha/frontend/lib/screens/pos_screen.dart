@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/produk.dart';
 import '../providers/pos_provider.dart';
 import '../providers/produk_provider.dart';
+import '../providers/usaha_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
 import 'dashboard_screen.dart';
@@ -35,6 +36,32 @@ class _PosScreenState extends State<PosScreen> {
         title: Row(
           children: [
             const Text('Mesin Kasir (POS)', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.bold, fontSize: 18)),
+            const SizedBox(width: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppTheme.lightBlueBg,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppTheme.secondaryBlue.withAlpha(50)),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<int>(
+                  value: pos.activeUnitId,
+                  items: context.watch<UsahaProvider>().daftarUsaha.map((u) {
+                    return DropdownMenuItem<int>(
+                      value: u.id,
+                      child: Text('📍 ${u.nama}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryBlue)),
+                    );
+                  }).toList(),
+                  onChanged: (val) {
+                    if (val != null) {
+                      final selected = context.read<UsahaProvider>().daftarUsaha.firstWhere((u) => u.id == val);
+                      pos.setActiveUnit(val, selected.nama);
+                    }
+                  },
+                ),
+              ),
+            ),
             const SizedBox(width: 12),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),

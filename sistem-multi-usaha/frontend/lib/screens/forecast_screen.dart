@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../providers/forecast_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
+import '../widgets/app_sidebar.dart';
 import 'dashboard_screen.dart';
 import 'usaha_screen.dart';
 import 'transaksi_screen.dart';
@@ -30,7 +31,7 @@ class ForecastScreen extends StatelessWidget {
       drawer: isMobile ? _buildNavigationDrawer(context) : null,
       body: Row(
         children: [
-          if (!isMobile) _buildDesktopSidebar(context),
+          if (!isMobile) const AppSidebar(activeRoute: 'forecast'),
           Expanded(
             child: SafeArea(
               child: SingleChildScrollView(

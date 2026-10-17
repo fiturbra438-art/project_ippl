@@ -5,6 +5,7 @@ import '../models/produk.dart';
 import '../providers/produk_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
+import '../widgets/app_sidebar.dart';
 import 'dashboard_screen.dart';
 import 'usaha_screen.dart';
 import 'transaksi_screen.dart';
@@ -35,7 +36,7 @@ class ProdukScreen extends StatelessWidget {
       drawer: isMobile ? _buildNavigationDrawer(context) : null,
       body: Row(
         children: [
-          if (!isMobile) _buildDesktopSidebar(context),
+          if (!isMobile) const AppSidebar(activeRoute: 'produk'),
           Expanded(
             child: SafeArea(
               child: Padding(

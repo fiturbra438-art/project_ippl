@@ -7,6 +7,7 @@ import '../providers/dashboard_provider.dart';
 import '../providers/notifikasi_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
+import '../widgets/app_sidebar.dart';
 import 'usaha_screen.dart';
 import 'produk_screen.dart';
 import 'pos_screen.dart';
@@ -65,7 +66,7 @@ class DashboardScreen extends StatelessWidget {
       drawer: isMobile ? _buildNavigationDrawer(context) : null,
       body: Row(
         children: [
-          if (!isMobile) _buildDesktopSidebar(context),
+          if (!isMobile) const AppSidebar(activeRoute: 'dashboard'),
           Expanded(
             child: SafeArea(
               child: SingleChildScrollView(

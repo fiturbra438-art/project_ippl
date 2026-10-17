@@ -5,6 +5,7 @@ import '../models/transaksi.dart';
 import '../providers/transaksi_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
+import '../widgets/app_sidebar.dart';
 import 'dashboard_screen.dart';
 import 'usaha_screen.dart';
 
@@ -35,7 +36,7 @@ class TransaksiScreen extends StatelessWidget {
       drawer: isMobile ? _buildNavigationDrawer(context) : null,
       body: Row(
         children: [
-          if (!isMobile) _buildDesktopSidebar(context),
+          if (!isMobile) const AppSidebar(activeRoute: 'transaksi'),
           Expanded(
             child: SafeArea(
               child: Padding(

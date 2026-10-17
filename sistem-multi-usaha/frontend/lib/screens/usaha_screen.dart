@@ -3,10 +3,12 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../models/usaha.dart';
 import '../providers/usaha_provider.dart';
+import '../providers/pos_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
+import '../widgets/app_sidebar.dart';
 import 'dashboard_screen.dart';
-import 'transaksi_screen.dart';
+import 'pos_screen.dart';
 
 class UsahaScreen extends StatelessWidget {
   const UsahaScreen({super.key});
@@ -35,7 +37,7 @@ class UsahaScreen extends StatelessWidget {
       drawer: isMobile ? _buildNavigationDrawer(context) : null,
       body: Row(
         children: [
-          if (!isMobile) _buildDesktopSidebar(context),
+          if (!isMobile) const AppSidebar(activeRoute: 'usaha'),
           Expanded(
             child: SafeArea(
               child: Padding(
@@ -168,23 +170,23 @@ class UsahaScreen extends StatelessWidget {
       return ListView.separated(
         itemCount: provider.daftarUsaha.length,
         separatorBuilder: (_, __) => const SizedBox(height: 12),
-        itemBuilder: (context, index) => _buildCardMobile(provider.daftarUsaha[index], currency),
+        itemBuilder: (context, index) => _buildCardMobile(context, provider.daftarUsaha[index], currency),
       );
     }
 
     return GridView.builder(
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: 480,
-        mainAxisExtent: 220,
+        mainAxisExtent: 250,
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,
       ),
       itemCount: provider.daftarUsaha.length,
-      itemBuilder: (context, index) => _buildCardDesktop(provider.daftarUsaha[index], currency),
+      itemBuilder: (context, index) => _buildCardDesktop(context, provider.daftarUsaha[index], currency),
     );
   }
 
-  Widget _buildCardDesktop(UsahaModel usaha, NumberFormat currency) {
+  Widget _buildCardDesktop(BuildContext context, UsahaModel usaha, NumberFormat currency) {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -231,11 +233,32 @@ class UsahaScreen extends StatelessWidget {
             ],
           ),
           Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              TextButton(
-                onPressed: () {},
-                child: const Text('Detail Analitik', style: TextStyle(color: AppTheme.primaryBlue, fontSize: 13)),
+              OutlinedButton.icon(
+                onPressed: () {
+                  context.read<PosProvider>().setActiveUnit(usaha.id, usaha.nama);
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const PosScreen()));
+                },
+                icon: const Icon(Icons.point_of_sale_rounded, size: 16),
+                label: const Text('Buka Kasir POS Unit Ini', style: TextStyle(fontSize: 12)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppTheme.primaryBlue,
+                  side: const BorderSide(color: AppTheme.secondaryBlue),
+                ),
+              ),
+              Row(
+                children: [
+                  IconButton(
+                    tooltip: 'Hapus Unit Usaha',
+                    icon: const Icon(Icons.delete_outline_rounded, size: 20, color: Color(0xFFDC2626)),
+                    onPressed: () => _konfirmasiHapusUsaha(context, usaha),
+                  ),
+                  TextButton(
+                    onPressed: () {},
+                    child: const Text('Detail Analitik', style: TextStyle(color: AppTheme.primaryBlue, fontSize: 13)),
+                  ),
+                ],
               ),
             ],
           ),
@@ -244,7 +267,7 @@ class UsahaScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildCardMobile(UsahaModel usaha, NumberFormat currency) {
+  Widget _buildCardMobile(BuildContext context, UsahaModel usaha, NumberFormat currency) {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -273,19 +296,18 @@ class UsahaScreen extends StatelessWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Laba Bersih', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-                  Text(currency.format(usaha.labaBersih), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.accentGreen)),
-                ],
+              OutlinedButton.icon(
+                onPressed: () {
+                  context.read<PosProvider>().setActiveUnit(usaha.id, usaha.nama);
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const PosScreen()));
+                },
+                icon: const Icon(Icons.point_of_sale_rounded, size: 16),
+                label: const Text('Buka Kasir', style: TextStyle(fontSize: 12)),
               ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  const Text('Pertumbuhan', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-                  Text('+${usaha.pertumbuhanPersen}%', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.primaryBlue)),
-                ],
+              IconButton(
+                tooltip: 'Hapus Unit Usaha',
+                icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFDC2626)),
+                onPressed: () => _konfirmasiHapusUsaha(context, usaha),
               ),
             ],
           ),
@@ -329,6 +351,37 @@ class UsahaScreen extends StatelessWidget {
       child: Text(
         kategori,
         style: TextStyle(color: text, fontSize: 11, fontWeight: FontWeight.bold),
+      ),
+    );
+  }
+
+  void _konfirmasiHapusUsaha(BuildContext context, UsahaModel usaha) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: const [
+            Icon(Icons.warning_amber_rounded, color: Color(0xFFDC2626)),
+            SizedBox(width: 8),
+            Text('Konfirmasi Hapus Usaha', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          ],
+        ),
+        content: Text('Apakah Anda yakin ingin menonaktifkan dan menghapus "${usaha.nama}" dari sistem? Data transaksi historis tetap diarsipkan di Audit Log.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+            onPressed: () {
+              Provider.of<UsahaProvider>(context, listen: false).hapusUsaha(usaha.id);
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Unit usaha "${usaha.nama}" berhasil dihapus.')),
+              );
+            },
+            child: const Text('Ya, Hapus Usaha'),
+          ),
+        ],
       ),
     );
   }
@@ -394,82 +447,6 @@ class UsahaScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildDesktopSidebar(BuildContext context) {
-    return Container(
-      width: 250,
-      decoration: const BoxDecoration(
-        color: AppTheme.surfaceWhite,
-        border: Border(right: BorderSide(color: AppTheme.cardBorder)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 28),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Row(
-              children: const [
-                Icon(Icons.hub_rounded, color: AppTheme.primaryBlue, size: 28),
-                SizedBox(width: 12),
-                Text(
-                  'MultiUsaha',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    color: AppTheme.primaryBlue,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 36),
-          _buildSidebarItem(context, 'Dashboard', Icons.dashboard_rounded, false, () {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
-          }),
-          _buildSidebarItem(context, 'Unit Usaha', Icons.storefront_rounded, true, () {}),
-          _buildSidebarItem(context, 'Transaksi', Icons.receipt_long_rounded, false, () {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const TransaksiScreen()));
-          }),
-          _buildSidebarItem(context, 'Portofolio BCG', Icons.pie_chart_rounded, false, () {}),
-          _buildSidebarItem(context, 'Forecasting', Icons.trending_up_rounded, false, () {}),
-          const Spacer(),
-          const Divider(color: AppTheme.cardBorder),
-          ListTile(
-            leading: const CircleAvatar(
-              backgroundColor: AppTheme.lightBlueBg,
-              child: Text('AD', style: TextStyle(color: AppTheme.primaryBlue, fontWeight: FontWeight.bold)),
-            ),
-            title: const Text('Admin Owner', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
-            subtitle: const Text('admin@usaha.com', style: TextStyle(fontSize: 12)),
-          ),
-          const SizedBox(height: 16),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSidebarItem(BuildContext context, String label, IconData icon, bool isSelected, VoidCallback onTap) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      decoration: BoxDecoration(
-        color: isSelected ? AppTheme.lightBlueBg : Colors.transparent,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: ListTile(
-        leading: Icon(icon, color: isSelected ? AppTheme.primaryBlue : AppTheme.textSecondary, size: 22),
-        title: Text(
-          label,
-          style: TextStyle(
-            color: isSelected ? AppTheme.primaryBlue : AppTheme.textSecondary,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-            fontSize: 14,
-          ),
-        ),
-        onTap: onTap,
-      ),
-    );
-  }
-
   Widget _buildNavigationDrawer(BuildContext context) {
     return Drawer(
       child: ListView(
@@ -500,14 +477,6 @@ class UsahaScreen extends StatelessWidget {
             title: const Text('Unit Usaha'),
             onTap: () => Navigator.pop(context),
           ),
-          ListTile(
-            leading: const Icon(Icons.receipt_long_rounded),
-            title: const Text('Transaksi'),
-            onTap: () {
-              Navigator.pop(context);
-              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const TransaksiScreen()));
-            },
-          ),
         ],
       ),
     );
@@ -519,8 +488,6 @@ class UsahaScreen extends StatelessWidget {
       onTap: (index) {
         if (index == 0) {
           Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
-        } else if (index == 2) {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const TransaksiScreen()));
         }
       },
       selectedItemColor: AppTheme.primaryBlue,
@@ -528,10 +495,8 @@ class UsahaScreen extends StatelessWidget {
       type: BottomNavigationBarType.fixed,
       backgroundColor: AppTheme.surfaceWhite,
       items: const [
-        BottomNavigationBarItem(icon: Icon(Icons.dashboard_rounded), label: 'Dashboard'),
+        BottomNavigationBarItem(icon: Icon(Icons.dashboard_rounded), label: 'Beranda'),
         BottomNavigationBarItem(icon: Icon(Icons.storefront_rounded), label: 'Usaha'),
-        BottomNavigationBarItem(icon: Icon(Icons.receipt_long_rounded), label: 'Transaksi'),
-        BottomNavigationBarItem(icon: Icon(Icons.pie_chart_rounded), label: 'Portofolio'),
       ],
     );
   }
