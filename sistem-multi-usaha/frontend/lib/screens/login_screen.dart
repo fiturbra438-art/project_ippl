@@ -13,31 +13,68 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _emailCtrl = TextEditingController(text: 'owner@bisnis.com');
+  bool _isRegisterMode = false;
+  final _emailCtrl = TextEditingController(text: 'owner@multi-usaha.com');
   final _passwordCtrl = TextEditingController(text: '123456');
+  final _namaCtrl = TextEditingController(text: 'Budi Santoso');
+  final _usahaCtrl = TextEditingController(text: 'Kopi & Retail Group');
+  final _otpCtrl = TextEditingController();
+
   bool _isLoading = false;
   String? _errorMessage;
 
-  void _handleLogin() async {
+  void _handleAction() async {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
 
-    final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final success = await authProvider.login(_emailCtrl.text, _passwordCtrl.text);
+    final auth = Provider.of<AuthProvider>(context, listen: false);
 
-    if (mounted) {
-      setState(() => _isLoading = false);
-      if (success) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const DashboardScreen()),
-        );
-      } else {
+    if (auth.isAwaiting2FA) {
+      final ok = await auth.verify2FACode(_otpCtrl.text);
+      if (mounted) {
+        setState(() => _isLoading = false);
+        if (ok) {
+          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
+        } else {
+          setState(() => _errorMessage = 'Kode 2FA salah atau kurang dari 4 digit.');
+        }
+      }
+      return;
+    }
+
+    if (_isRegisterMode) {
+      if (_namaCtrl.text.isEmpty || _emailCtrl.text.isEmpty || _passwordCtrl.text.length < 6) {
         setState(() {
-          _errorMessage = 'Email atau password tidak valid (min 6 karakter).';
+          _isLoading = false;
+          _errorMessage = 'Lengkapi seluruh data dan password minimal 6 karakter.';
         });
+        return;
+      }
+      final ok = await auth.registerOwner(
+        nama: _namaCtrl.text,
+        email: _emailCtrl.text,
+        password: _passwordCtrl.text,
+        namaUsahaUtama: _usahaCtrl.text,
+      );
+      if (mounted) {
+        setState(() => _isLoading = false);
+        if (ok) {
+          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
+        }
+      }
+    } else {
+      final ok = await auth.initiateLogin(_emailCtrl.text, _passwordCtrl.text);
+      if (mounted) {
+        setState(() => _isLoading = false);
+        if (ok) {
+          if (!auth.isAwaiting2FA) {
+            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
+          }
+        } else {
+          setState(() => _errorMessage = 'Email atau password salah (minimal 6 karakter).');
+        }
       }
     }
   }
@@ -45,6 +82,7 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     final isMobile = ResponsiveLayout.isMobile(context);
+    final auth = context.watch<AuthProvider>();
 
     return Scaffold(
       backgroundColor: isMobile ? AppTheme.surfaceWhite : AppTheme.backgroundLight,
@@ -52,7 +90,7 @@ class _LoginScreenState extends State<LoginScreen> {
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 440),
+            constraints: const BoxConstraints(maxWidth: 460),
             child: Container(
               padding: EdgeInsets.all(isMobile ? 12 : 36),
               decoration: isMobile
@@ -80,29 +118,39 @@ class _LoginScreenState extends State<LoginScreen> {
                         color: AppTheme.lightBlueBg,
                         borderRadius: BorderRadius.circular(20),
                       ),
-                      child: const Icon(Icons.hub_rounded, size: 40, color: AppTheme.primaryBlue),
+                      child: Icon(
+                        auth.isAwaiting2FA ? Icons.security_rounded : Icons.hub_rounded,
+                        size: 36,
+                        color: AppTheme.primaryBlue,
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 24),
-                  const Center(
+                  const SizedBox(height: 20),
+                  Center(
                     child: Text(
-                      'MultiUsaha',
-                      style: TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.w900,
+                      auth.isAwaiting2FA
+                          ? 'Verifikasi 2 Faktor (2FA)'
+                          : (_isRegisterMode ? 'Registrasi Akun Owner' : 'MultiUsaha Login'),
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
                         color: AppTheme.primaryBlue,
-                        letterSpacing: -0.5,
                       ),
                     ),
                   ),
                   const SizedBox(height: 6),
-                  const Center(
+                  Center(
                     child: Text(
-                      'Kelola Portofolio, Arus Kas & Analisis BCG',
-                      style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+                      auth.isAwaiting2FA
+                          ? 'Masukkan 6-digit kode verifikasi keamanan akun Owner'
+                          : (_isRegisterMode
+                              ? 'Buat akun pemilik bisnis multi-cabang'
+                              : 'Sistem Manajemen Multi-Usaha Terintegrasi AI'),
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary),
                     ),
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 28),
                   if (_errorMessage != null)
                     Container(
                       margin: const EdgeInsets.only(bottom: 16),
@@ -125,34 +173,80 @@ class _LoginScreenState extends State<LoginScreen> {
                         ],
                       ),
                     ),
-                  const Text('Email', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _emailCtrl,
-                    decoration: InputDecoration(
-                      hintText: 'nama@usaha.com',
-                      prefixIcon: const Icon(Icons.email_outlined, size: 20),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  if (auth.isAwaiting2FA) ...[
+                    const Text('Kode OTP / Token Authenticator', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _otpCtrl,
+                      keyboardType: TextInputType.number,
+                      textAlign: TextAlign.center,
+                      maxLength: 6,
+                      style: const TextStyle(letterSpacing: 10, fontSize: 24, fontWeight: FontWeight.bold),
+                      decoration: InputDecoration(
+                        hintText: '123456',
+                        counterText: '',
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 18),
-                  const Text('Kata Sandi', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: _passwordCtrl,
-                    obscureText: true,
-                    decoration: InputDecoration(
-                      hintText: '••••••••',
-                      prefixIcon: const Icon(Icons.lock_outline_rounded, size: 20),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Tip demo: Masukkan sembarang 6 angka (misal: 123456)',
+                      style: TextStyle(fontSize: 11, color: AppTheme.textMuted),
                     ),
-                  ),
+                  ] else ...[
+                    if (_isRegisterMode) ...[
+                      const Text('Nama Lengkap Pemilik', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: _namaCtrl,
+                        decoration: InputDecoration(
+                          hintText: 'Nama lengkap Anda',
+                          prefixIcon: const Icon(Icons.person_outline, size: 20),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      const Text('Nama Bisnis / Perusahaan Induk', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: _usahaCtrl,
+                        decoration: InputDecoration(
+                          hintText: 'Misal: PT Aneka Sukses',
+                          prefixIcon: const Icon(Icons.business_outlined, size: 20),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                    ],
+                    const Text('Email Akun', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: _emailCtrl,
+                      decoration: InputDecoration(
+                        hintText: 'nama@multi-usaha.com',
+                        prefixIcon: const Icon(Icons.email_outlined, size: 20),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text('Kata Sandi', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: _passwordCtrl,
+                      obscureText: true,
+                      decoration: InputDecoration(
+                        hintText: '••••••••',
+                        prefixIcon: const Icon(Icons.lock_outline_rounded, size: 20),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 24),
                   SizedBox(
                     width: double.infinity,
                     height: 48,
                     child: ElevatedButton(
-                      onPressed: _isLoading ? null : _handleLogin,
+                      onPressed: _isLoading ? null : _handleAction,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppTheme.primaryBlue,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -163,23 +257,41 @@ class _LoginScreenState extends State<LoginScreen> {
                               height: 20,
                               child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                             )
-                          : const Text(
-                              'Masuk ke Sistem',
-                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                          : Text(
+                              auth.isAwaiting2FA
+                                  ? 'Verifikasi & Masuk'
+                                  : (_isRegisterMode ? 'Daftar Akun Owner' : 'Masuk ke Sistem'),
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
                             ),
                     ),
                   ),
-                  const SizedBox(height: 20),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Text('Belum punya akun? ', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-                      TextButton(
-                        onPressed: () {},
-                        child: const Text('Daftar di sini', style: TextStyle(color: AppTheme.accentGreen, fontWeight: FontWeight.bold, fontSize: 13)),
+                  if (!auth.isAwaiting2FA) ...[
+                    const SizedBox(height: 16),
+                    Center(
+                      child: TextButton(
+                        onPressed: () {
+                          setState(() {
+                            _isRegisterMode = !_isRegisterMode;
+                            _errorMessage = null;
+                          });
+                        },
+                        child: Text(
+                          _isRegisterMode
+                              ? 'Sudah punya akun? Masuk di sini'
+                              : 'Belum punya akun? Daftar sebagai Owner',
+                          style: const TextStyle(color: AppTheme.primaryBlue, fontSize: 13, fontWeight: FontWeight.bold),
+                        ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ] else ...[
+                    const SizedBox(height: 16),
+                    Center(
+                      child: TextButton(
+                        onPressed: () => auth.logout(),
+                        child: const Text('Batal & Masuk dengan akun lain', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
