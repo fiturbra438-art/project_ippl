@@ -10,6 +10,9 @@ import 'transaksi_screen.dart';
 import 'portofolio_screen.dart';
 import 'forecast_screen.dart';
 import 'login_screen.dart';
+import 'produk_screen.dart';
+import 'laporan_screen.dart';
+import 'chat_ai_screen.dart';
 
 class DashboardScreen extends StatelessWidget {
   const DashboardScreen({super.key});
@@ -475,14 +478,23 @@ class DashboardScreen extends StatelessWidget {
           _buildSidebarItem(context, 1, Icons.storefront_rounded, 'Unit Usaha', () {
             Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const UsahaScreen()));
           }),
-          _buildSidebarItem(context, 2, Icons.receipt_long_rounded, 'Transaksi', () {
+          _buildSidebarItem(context, 2, Icons.inventory_2_rounded, 'Inventaris & Produk', () {
+            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ProdukScreen()));
+          }),
+          _buildSidebarItem(context, 3, Icons.receipt_long_rounded, 'Transaksi', () {
             Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const TransaksiScreen()));
           }),
-          _buildSidebarItem(context, 3, Icons.pie_chart_rounded, 'Portofolio BCG', () {
+          _buildSidebarItem(context, 4, Icons.assessment_rounded, 'Laporan Keuangan', () {
+            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LaporanScreen()));
+          }),
+          _buildSidebarItem(context, 5, Icons.pie_chart_rounded, 'Portofolio BCG', () {
             Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const PortofolioScreen()));
           }),
-          _buildSidebarItem(context, 4, Icons.trending_up_rounded, 'Forecasting', () {
+          _buildSidebarItem(context, 6, Icons.trending_up_rounded, 'Forecasting', () {
             Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ForecastScreen()));
+          }),
+          _buildSidebarItem(context, 7, Icons.smart_toy_rounded, 'Asisten AI', () {
+            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ChatAiScreen()));
           }),
           const Spacer(),
           const Divider(color: AppTheme.cardBorder),
@@ -578,6 +590,14 @@ class DashboardScreen extends StatelessWidget {
             },
           ),
           ListTile(
+            leading: const Icon(Icons.assessment_rounded),
+            title: const Text('Laporan Keuangan'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LaporanScreen()));
+            },
+          ),
+          ListTile(
             leading: const Icon(Icons.pie_chart_rounded),
             title: const Text('Portofolio BCG'),
             onTap: () {
@@ -591,6 +611,14 @@ class DashboardScreen extends StatelessWidget {
             onTap: () {
               Navigator.pop(context);
               Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ForecastScreen()));
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.smart_toy_rounded),
+            title: const Text('Asisten AI'),
+            onTap: () {
+              Navigator.pop(context);
+              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ChatAiScreen()));
             },
           ),
         ],

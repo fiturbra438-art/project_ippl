@@ -6,8 +6,14 @@ import 'providers/transaksi_provider.dart';
 import 'providers/portofolio_provider.dart';
 import 'providers/forecast_provider.dart';
 import 'providers/auth_provider.dart';
+import 'providers/produk_provider.dart';
+import 'providers/laporan_provider.dart';
+import 'providers/chat_ai_provider.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/login_screen.dart';
+import 'screens/produk_screen.dart';
+import 'screens/laporan_screen.dart';
+import 'screens/chat_ai_screen.dart';
 import 'theme/app_theme.dart';
 
 void main() {
@@ -20,6 +26,9 @@ void main() {
         ChangeNotifierProvider(create: (_) => TransaksiProvider()),
         ChangeNotifierProvider(create: (_) => PortofolioProvider()),
         ChangeNotifierProvider(create: (_) => ForecastProvider()),
+        ChangeNotifierProvider(create: (_) => ProdukProvider()),
+        ChangeNotifierProvider(create: (_) => LaporanProvider()),
+        ChangeNotifierProvider(create: (_) => ChatAiProvider()),
       ],
       child: const MultiUsahaApp(),
     ),
@@ -38,6 +47,9 @@ class MultiUsahaApp extends StatelessWidget {
       home: const DashboardScreen(),
       routes: {
         '/login': (_) => const LoginScreen(),
+        '/produk': (_) => const ProdukScreen(),
+        '/laporan': (_) => const LaporanScreen(),
+        '/chat': (_) => const ChatAiScreen(),
       },
     );
   }
