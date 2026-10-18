@@ -124,20 +124,45 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
   }
 
   Widget _buildDesktopHeader() {
+    final sisaKuota = context.watch<ChatAiProvider>().sisaKuotaAi;
+
     return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(color: AppTheme.lightBlueBg, borderRadius: BorderRadius.circular(10)),
-          child: const Icon(Icons.auto_awesome_rounded, color: AppTheme.primaryBlue, size: 24),
-        ),
-        const SizedBox(width: 12),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
-            Text('Konsultasi & Insight AI', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppTheme.textPrimary)),
-            Text('Tanyakan apa saja seputar data keuangan, alokasi BCG, dan performa cabang.', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: AppTheme.lightBlueBg, borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.auto_awesome_rounded, color: AppTheme.primaryBlue, size: 24),
+            ),
+            const SizedBox(width: 12),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Text('Konsultasi & Insight AI BI', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppTheme.textPrimary)),
+                Text('Tanyakan apa saja seputar data keuangan, alokasi BCG, dan performa cabang.', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+              ],
+            ),
           ],
+        ),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: AppTheme.lightGreenBg,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFFA7F3D0)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.bolt_rounded, size: 18, color: AppTheme.accentGreen),
+              const SizedBox(width: 6),
+              Text(
+                'Sisa Kuota AI: $sisaKuota Tanya',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.accentGreen),
+              ),
+            ],
+          ),
         ),
       ],
     );

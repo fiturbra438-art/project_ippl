@@ -139,10 +139,12 @@ pub struct TutupShiftRequest {
     pub shift_id: i64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct CheckoutItemRequest {
     pub produk_id: i64,
     pub jumlah: i32,
+    #[serde(default)]
+    pub harga_satuan: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]

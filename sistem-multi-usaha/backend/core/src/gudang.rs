@@ -5,7 +5,7 @@ use axum::{
     Json,
 };
 use std::sync::Arc;
-use chrono::Local;
+use chrono::{Local, Utc};
 
 use crate::auth::extract_claims;
 use crate::models::{
@@ -292,94 +292,77 @@ pub async fn list_transfer_stok(
     )
 }
 
+// 3. TRANSFER STOK (Memanggil Stored Procedure: CALL sp_transfer_stok_antar_unit)
 pub async fn create_transfer_stok(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(payload): Json<CreateTransferStokRequest>,
 ) -> impl IntoResponse {
     let claims = extract_claims(&headers, &state.jwt_secret);
-    let owner_id = claims.as_ref().map(|c| c.owner_id).unwrap_or(1);
-    let aktor_nama = claims.as_ref().map(|c| c.sub.clone()).unwrap_or_else(|| "Logistik".to_string());
+    let user_id = claims.as_ref().map(|c| c.user_id).unwrap_or(1);
 
-    let usahas = state.usahas.read().await;
-    let nama_asal = usahas.iter().find(|u| u.id == payload.unit_asal_id).map(|u| u.nama.clone()).unwrap_or_else(|| "Unit Asal".to_string());
-    let nama_tujuan = usahas.iter().find(|u| u.id == payload.unit_tujuan_id).map(|u| u.nama.clone()).unwrap_or_else(|| "Unit Tujuan".to_string());
-    drop(usahas);
+    let result: Result<(Option<String>, Option<String>), sqlx::Error> = sqlx::query_as(
+        "CALL sp_transfer_stok_antar_unit($1, $2, $3, $4, $5, NULL, NULL)"
+    )
+    .bind(payload.unit_asal_id as i32)
+    .bind(payload.unit_tujuan_id as i32)
+    .bind(payload.produk_id as i32)
+    .bind(payload.jumlah)
+    .bind(user_id as i32)
+    .fetch_one(&state.db)
+    .await;
 
-    let mut produks = state.produks.write().await;
-    let p_asal = match produks.iter_mut().find(|p| p.id == payload.produk_id) {
-        Some(p) => {
-            if p.stok < payload.jumlah {
+    match result {
+        Ok((status_opt, pesan_opt)) => {
+            let status_str = status_opt.unwrap_or_else(|| "error".to_string());
+            let pesan_str = pesan_opt.unwrap_or_else(|| "Gagal memproses transfer stok.".to_string());
+
+            if status_str == "error" {
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(ApiResponse::<TransferStokModel> {
                         status: "error".to_string(),
-                        message: format!("Stok di unit asal tidak mencukupi (Tersedia: {}, Diminta: {})", p.stok, payload.jumlah),
+                        message: pesan_str,
                         data: None,
                     }),
                 );
             }
-            p.stok -= payload.jumlah;
-            p.clone()
+
+            let new_transfer = TransferStokModel {
+                id: Utc::now().timestamp(),
+                owner_id: 1,
+                unit_asal_id: payload.unit_asal_id,
+                nama_unit_asal: format!("Unit #{}", payload.unit_asal_id),
+                unit_tujuan_id: payload.unit_tujuan_id,
+                nama_unit_tujuan: format!("Unit #{}", payload.unit_tujuan_id),
+                produk_id: payload.produk_id,
+                nama_produk: format!("Produk #{}", payload.produk_id),
+                jumlah: payload.jumlah,
+                waktu_kirim: Local::now().format("%Y-%m-%d %H:%M").to_string(),
+                waktu_terima: Some(Local::now().format("%Y-%m-%d %H:%M").to_string()),
+                status: StatusTransfer::Diterima,
+            };
+
+            (
+                StatusCode::CREATED,
+                Json(ApiResponse::<TransferStokModel> {
+                    status: "success".to_string(),
+                    message: pesan_str,
+                    data: Some(new_transfer),
+                }),
+            )
         }
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
+        Err(e) => {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiResponse::<TransferStokModel> {
                     status: "error".to_string(),
-                    message: "Produk tidak ditemukan.".to_string(),
+                    message: format!("Error database: {}", e),
                     data: None,
                 }),
-            );
+            )
         }
-    };
-    drop(produks);
-
-    let mut list = state.transfer_stoks.write().await;
-    let new_id = (list.len() as i64) + 1;
-    let waktu_now = Local::now().format("%Y-%m-%d %H:%M").to_string();
-
-    let new_transfer = TransferStokModel {
-        id: new_id,
-        owner_id,
-        unit_asal_id: payload.unit_asal_id,
-        nama_unit_asal: nama_asal.clone(),
-        unit_tujuan_id: payload.unit_tujuan_id,
-        nama_unit_tujuan: nama_tujuan.clone(),
-        produk_id: payload.produk_id,
-        nama_produk: p_asal.nama.clone(),
-        jumlah: payload.jumlah,
-        waktu_kirim: waktu_now.clone(),
-        waktu_terima: None,
-        status: StatusTransfer::Pending,
-    };
-
-    list.push(new_transfer.clone());
-    drop(list);
-
-    // Audit log
-    let mut logs = state.audit_logs.write().await;
-    let log_id = (logs.len() as i64) + 1;
-    logs.push(AuditLogModel {
-        id: log_id,
-        owner_id,
-        aktor: aktor_nama,
-        role: "admin_gudang".to_string(),
-        aksi: "Transfer Stok".to_string(),
-        modul: "Gudang".to_string(),
-        target: format!("{} -> {}", nama_asal, nama_tujuan),
-        detail: format!("Mengirim {} unit produk '{}'", payload.jumlah, p_asal.nama),
-        waktu: waktu_now,
-    });
-
-    (
-        StatusCode::CREATED,
-        Json(ApiResponse::<TransferStokModel> {
-            status: "success".to_string(),
-            message: "Mutasi transfer stok berhasil diproses dan stok unit asal telah dipotong.".to_string(),
-            data: Some(new_transfer),
-        }),
-    )
+    }
 }
 
 pub async fn update_status_transfer(

@@ -27,7 +27,19 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let shared_state = Arc::new(AppState::new());
+    // Load .env
+    dotenvy::dotenv().ok();
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgresql://usaha_user:Fitur1206@localhost:5432/usaha_db".to_string());
+
+    tracing::info!("🔌 Menghubungkan ke PostgreSQL: {}", database_url);
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(10)
+        .connect(&database_url)
+        .await
+        .expect("Gagal terhubung ke database PostgreSQL!");
+
+    let shared_state = Arc::new(AppState::new(pool).await);
 
     let cors = CorsLayer::new()
         .allow_origin(Any)

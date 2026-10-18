@@ -1,25 +1,28 @@
 import 'package:flutter/material.dart';
 import '../models/chat_model.dart';
+import '../services/api_service.dart';
 
 class ChatAiProvider extends ChangeNotifier {
   final List<ChatMessageModel> _messages = [
     ChatMessageModel(
       id: '1',
-      content: 'Halo! Saya Asisten AI Finansial & Portofolio Anda. Anda bisa menanyakan analisis performa cabang, evaluasi arus kas, maupun saran alokasi modal BCG.',
+      content: 'Halo! Saya Asisten AI Finansial & Portofolio Bisnis Anda. Saya terhubung langsung dengan data keuangan cabang, kasir POS, dan inventaris gudang Anda. Ada yang bisa saya bantu analisa?',
       isUser: false,
-      timestamp: DateTime.now().subtract(const Duration(minutes: 5)),
+      timestamp: DateTime.now(),
       suggestions: [
-        'Bagaimana performa Kedai Kopi bulan ini?',
-        'Berapa alokasi modal ideal untuk ekspansi?',
-        'Unit bisnis mana yang paling hemat biaya?',
+        'Berapa total omzet usaha saya saat ini?',
+        'Apakah ada produk yang stoknya kritis?',
+        'Berikan saran strategi alokasi modal',
       ],
     ),
   ];
 
   bool _isTyping = false;
+  int _sisaKuotaAi = 250;
 
   List<ChatMessageModel> get messages => _messages;
   bool get isTyping => _isTyping;
+  int get sisaKuotaAi => _sisaKuotaAi;
 
   Future<void> sendMessage(String text) async {
     if (text.trim().isEmpty) return;
@@ -35,18 +38,27 @@ class ChatAiProvider extends ChangeNotifier {
     _isTyping = true;
     notifyListeners();
 
-    await Future.delayed(const Duration(milliseconds: 900));
-
     String reply = '';
-    final lower = text.toLowerCase();
-    if (lower.contains('kopi') || lower.contains('kedai')) {
-      reply = 'Kedai Kopi Bahagia (Star) mencatatkan pendapatan Rp 48,500,000 dengan laba bersih Rp 17,300,000 (margin 35.7%). Pertumbuhannya mencapai +14.8%, sangat disarankan untuk ekspansi varian produk sore hari.';
-    } else if (lower.contains('modal') || lower.contains('alokasi') || lower.contains('bcg')) {
-      reply = 'Berdasarkan BCG Matrix, Laundry Bersih Kilat menghasilkan surplus kas konsisten (Cash Cow). Rekomendasi: Alihkan 20% (± Rp 3.3jt) ke Toko Elektronik Digital (Question Mark) untuk pemasaran digital dan stok barang fast-moving.';
-    } else if (lower.contains('hemat') || lower.contains('biaya') || lower.contains('pengeluaran')) {
-      reply = 'Unit paling efisien adalah Laundry Bersih Kilat dengan rasio pengeluaran hanya 48% dari omzet, berbanding Toko Elektronik yang rasio biayanya 90%.';
-    } else {
-      reply = 'Berdasarkan data keuangan multi-usaha terkini: Total pendapatan agregat mencapai Rp 159,400,000 dengan margin laba 26.2%. Arus kas berada di level sehat dan siap untuk ekspansi kuartal depan.';
+
+    try {
+      // Panggil backend Core Rust endpoint AI
+      final res = await ApiService.post('/ai/chat', {
+        'pesan': text,
+      });
+
+      if (res != null && res['status'] == 'success' && res['data'] != null) {
+        reply = res['data']['balasan'] as String? ?? 'Tidak ada respon dari AI.';
+        if (res['data']['sisa_kuota_ai'] != null) {
+          _sisaKuotaAi = res['data']['sisa_kuota_ai'] as int;
+        }
+      } else if (res != null && res['message'] != null) {
+        reply = '⚠️ ${res['message']}';
+      } else {
+        // Fallback jika backend offline/tidak terjangkau
+        reply = _localFallbackReply(text);
+      }
+    } catch (_) {
+      reply = _localFallbackReply(text);
     }
 
     _messages.add(
@@ -61,4 +73,16 @@ class ChatAiProvider extends ChangeNotifier {
     _isTyping = false;
     notifyListeners();
   }
+
+  String _localFallbackReply(String text) {
+    final lower = text.toLowerCase();
+    if (lower.contains('omzet') || lower.contains('pendapatan')) {
+      return 'Total omzet bisnis Anda terpantau langsung melalui sistem konsolidasi POS dan pencatatan kas unit usaha.';
+    } else if (lower.contains('stok') || lower.contains('kritis')) {
+      return 'Pengecekan stok otomatis aktif. Barang yang mencapai batas minimum akan langsung terdata di Peringatan Stok Kritis.';
+    } else {
+      return 'Saya siap membantu menganalisis kesehatan finansial, evaluasi cabang, maupun efisiensi biaya usaha Anda.';
+    }
+  }
 }
+

@@ -10,7 +10,7 @@ use chrono::Local;
 
 use crate::auth::extract_claims;
 use crate::models::{
-    AuditLogModel, ItemCheckout, JenisTransaksi, ShiftKasirModel, StatusShift, TransaksiModel,
+    AuditLogModel, JenisTransaksi, ShiftKasirModel, StatusShift, TransaksiModel,
 };
 use crate::schemas::{
     ApiResponse, BukaShiftRequest, CheckoutRequest, CreateTransaksiManualRequest, TutupShiftRequest,
@@ -49,172 +49,151 @@ pub async fn get_shift_status(
     )
 }
 
-// 2. BUKA SHIFT KASIR
+// 2. BUKA SHIFT KASIR (Memanggil Stored Procedure: CALL sp_buka_shift_kasir)
 pub async fn buka_shift(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(payload): Json<BukaShiftRequest>,
 ) -> impl IntoResponse {
     let claims = extract_claims(&headers, &state.jwt_secret);
-    let kasir_id = claims.as_ref().map(|c| c.user_id).unwrap_or(2);
+    let kasir_id = claims.as_ref().map(|c| c.user_id).unwrap_or(1);
     let kasir_nama = claims.as_ref().map(|c| c.sub.clone()).unwrap_or_else(|| "Andi Kasir".to_string());
-    let owner_id = claims.as_ref().map(|c| c.owner_id).unwrap_or(1);
 
-    // Cek apakah unit usaha punya fitur POS
-    let usahas = state.usahas.read().await;
-    let usaha = match usahas.iter().find(|u| u.id == payload.unit_id) {
-        Some(u) => u.clone(),
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
+    let result: Result<(Option<i32>, Option<String>, Option<String>), sqlx::Error> = sqlx::query_as(
+        "CALL sp_buka_shift_kasir($1, $2, $3, $4, NULL, NULL, NULL)"
+    )
+    .bind(payload.unit_id as i32)
+    .bind(kasir_id as i32)
+    .bind(&kasir_nama)
+    .bind(rust_decimal::Decimal::from_f64_retain(payload.modal_awal).unwrap_or_default())
+    .fetch_one(&state.db)
+    .await;
+
+    match result {
+        Ok((shift_id_opt, status_opt, pesan_opt)) => {
+            let status_str = status_opt.unwrap_or_else(|| "error".to_string());
+            let pesan_str = pesan_opt.unwrap_or_else(|| "Gagal membuka shift.".to_string());
+
+            if status_str == "error" {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiResponse::<ShiftKasirModel> {
+                        status: "error".to_string(),
+                        message: pesan_str,
+                        data: None,
+                    }),
+                );
+            }
+
+            let shift_id = shift_id_opt.unwrap_or(0) as i64;
+            let waktu_now = Local::now().format("%Y-%m-%d %H:%M").to_string();
+
+            let new_shift = ShiftKasirModel {
+                id: shift_id,
+                unit_id: payload.unit_id,
+                kasir_id,
+                nama_kasir: kasir_nama,
+                modal_awal: payload.modal_awal,
+                total_penjualan_tunai: 0.0,
+                total_penjualan_non_tunai: 0.0,
+                total_transaksi: 0,
+                waktu_buka: waktu_now,
+                waktu_tutup: None,
+                status: StatusShift::Open,
+            };
+
+            (
+                StatusCode::CREATED,
+                Json(ApiResponse::<ShiftKasirModel> {
+                    status: "success".to_string(),
+                    message: pesan_str,
+                    data: Some(new_shift),
+                }),
+            )
+        }
+        Err(e) => {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiResponse::<ShiftKasirModel> {
                     status: "error".to_string(),
-                    message: "Unit usaha tidak ditemukan.".to_string(),
+                    message: format!("Error database: {}", e),
                     data: None,
                 }),
-            );
+            )
         }
-    };
-    if !usaha.has_pos {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<ShiftKasirModel> {
-                status: "error".to_string(),
-                message: format!("Unit usaha '{}' tidak menggunakan sistem kasir POS.", usaha.nama),
-                data: None,
-            }),
-        );
     }
-    drop(usahas);
-
-    let mut shifts = state.shifts.write().await;
-    // Cek apakah sudah ada shift yang terbuka di unit ini
-    if shifts.iter().any(|s| s.unit_id == payload.unit_id && s.status == StatusShift::Open) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<ShiftKasirModel> {
-                status: "error".to_string(),
-                message: "Masih terdapat shift kasir yang aktif untuk unit ini. Tutup shift terlebih dahulu.".to_string(),
-                data: None,
-            }),
-        );
-    }
-
-    let new_id = (shifts.len() as i64) + 1;
-    let waktu_now = Local::now().format("%Y-%m-%d %H:%M").to_string();
-
-    let new_shift = ShiftKasirModel {
-        id: new_id,
-        unit_id: payload.unit_id,
-        kasir_id,
-        nama_kasir: kasir_nama.clone(),
-        modal_awal: payload.modal_awal,
-        total_penjualan_tunai: 0.0,
-        total_penjualan_non_tunai: 0.0,
-        total_transaksi: 0,
-        waktu_buka: waktu_now.clone(),
-        waktu_tutup: None,
-        status: StatusShift::Open,
-    };
-
-    shifts.push(new_shift.clone());
-    drop(shifts);
-
-    // Audit log
-    let mut logs = state.audit_logs.write().await;
-    let log_id = (logs.len() as i64) + 1;
-    logs.push(AuditLogModel {
-        id: log_id,
-        owner_id,
-        aktor: kasir_nama,
-        role: "kasir".to_string(),
-        aksi: "Buka Shift".to_string(),
-        modul: "POS".to_string(),
-        target: usaha.nama,
-        detail: format!("Membuka shift kasir dengan modal awal Rp {:.0}", payload.modal_awal),
-        waktu: waktu_now,
-    });
-
-    (
-        StatusCode::CREATED,
-        Json(ApiResponse::<ShiftKasirModel> {
-            status: "success".to_string(),
-            message: "Shift kasir berhasil dibuka.".to_string(),
-            data: Some(new_shift),
-        }),
-    )
 }
 
-// 3. TUTUP SHIFT KASIR
+// 3. TUTUP SHIFT KASIR (Memanggil Stored Procedure: CALL sp_tutup_shift_kasir)
 pub async fn tutup_shift(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(payload): Json<TutupShiftRequest>,
 ) -> impl IntoResponse {
-    let claims = extract_claims(&headers, &state.jwt_secret);
-    let aktor_nama = claims.as_ref().map(|c| c.sub.clone()).unwrap_or_else(|| "Kasir".to_string());
-    let owner_id = claims.as_ref().map(|c| c.owner_id).unwrap_or(1);
+    let result: Result<(Option<rust_decimal::Decimal>, Option<String>, Option<String>), sqlx::Error> = sqlx::query_as(
+        "CALL sp_tutup_shift_kasir($1, $2, NULL, NULL, NULL)"
+    )
+    .bind(payload.shift_id as i32)
+    .bind(rust_decimal::Decimal::ZERO)
+    .fetch_one(&state.db)
+    .await;
 
-    let mut shifts = state.shifts.write().await;
-    if let Some(s) = shifts.iter_mut().find(|s| s.id == payload.shift_id) {
-        if s.status == StatusShift::Closed {
-            return (
-                StatusCode::BAD_REQUEST,
+    match result {
+        Ok((_selisih_opt, status_opt, pesan_opt)) => {
+            let status_str = status_opt.unwrap_or_else(|| "error".to_string());
+            let pesan_str = pesan_opt.unwrap_or_else(|| "Gagal menutup shift.".to_string());
+
+            if status_str == "error" {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiResponse::<ShiftKasirModel> {
+                        status: "error".to_string(),
+                        message: pesan_str,
+                        data: None,
+                    }),
+                );
+            }
+
+            let waktu_tutup = Local::now().format("%Y-%m-%d %H:%M").to_string();
+            let shift_hasil = ShiftKasirModel {
+                id: payload.shift_id,
+                unit_id: 1,
+                kasir_id: 1,
+                nama_kasir: "Kasir".to_string(),
+                modal_awal: 0.0,
+                total_penjualan_tunai: 0.0,
+                total_penjualan_non_tunai: 0.0,
+                total_transaksi: 0,
+                waktu_buka: waktu_tutup.clone(),
+                waktu_tutup: Some(waktu_tutup),
+                status: StatusShift::Closed,
+            };
+
+            (
+                StatusCode::OK,
+                Json(ApiResponse::<ShiftKasirModel> {
+                    status: "success".to_string(),
+                    message: pesan_str,
+                    data: Some(shift_hasil),
+                }),
+            )
+        }
+        Err(e) => {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiResponse::<ShiftKasirModel> {
                     status: "error".to_string(),
-                    message: "Shift ini sudah ditutup sebelumnya.".to_string(),
+                    message: format!("Error database: {}", e),
                     data: None,
                 }),
-            );
+            )
         }
-
-        let waktu_tutup = Local::now().format("%Y-%m-%d %H:%M").to_string();
-        s.status = StatusShift::Closed;
-        s.waktu_tutup = Some(waktu_tutup.clone());
-
-        let total_omzet = s.total_penjualan_tunai + s.total_penjualan_non_tunai;
-        let shift_hasil = s.clone();
-        drop(shifts);
-
-        // Audit Log
-        let mut logs = state.audit_logs.write().await;
-        let log_id = (logs.len() as i64) + 1;
-        logs.push(AuditLogModel {
-            id: log_id,
-            owner_id,
-            aktor: aktor_nama,
-            role: "kasir".to_string(),
-            aksi: "Tutup Shift".to_string(),
-            modul: "POS".to_string(),
-            target: format!("Shift #{}", payload.shift_id),
-            detail: format!(
-                "Shift ditutup. Total transaksi: {}, Total omzet: Rp {:.0} (Tunai: Rp {:.0}, Non-Tunai: Rp {:.0})",
-                shift_hasil.total_transaksi, total_omzet, shift_hasil.total_penjualan_tunai, shift_hasil.total_penjualan_non_tunai
-            ),
-            waktu: waktu_tutup,
-        });
-
-        return (
-            StatusCode::OK,
-            Json(ApiResponse::<ShiftKasirModel> {
-                status: "success".to_string(),
-                message: "Shift kasir berhasil ditutup dan laporan kasir telah digenerate.".to_string(),
-                data: Some(shift_hasil),
-            }),
-        );
     }
-
-    (
-        StatusCode::NOT_FOUND,
-        Json(ApiResponse::<ShiftKasirModel> {
-            status: "error".to_string(),
-            message: "Shift kasir tidak ditemukan.".to_string(),
-            data: None,
-        }),
-    )
 }
 
-// 4. CHECKOUT TRANSAKSI KASIR (Atomic decrement stock + Catat Transaksi + Update Shift)
+// 4. CHECKOUT TRANSAKSI KASIR
+// Dijalankan dengan memanggil Stored Procedure PostgreSQL: "CALL sp_proses_checkout_kasir(...)"
+// Prosedur ini otomatis memicu Trigger pemotongan stok, trigger update omzet, validasi Function stok, dan pencatatan audit.
 pub async fn checkout_pos(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -222,6 +201,7 @@ pub async fn checkout_pos(
 ) -> impl IntoResponse {
     let claims = extract_claims(&headers, &state.jwt_secret);
     let owner_id = claims.as_ref().map(|c| c.owner_id).unwrap_or(1);
+    let user_id = claims.as_ref().map(|c| c.user_id).unwrap_or(1);
     let kasir_nama = claims.as_ref().map(|c| c.sub.clone()).unwrap_or_else(|| "Kasir POS".to_string());
 
     if payload.items.is_empty() {
@@ -235,166 +215,93 @@ pub async fn checkout_pos(
         );
     }
 
-    // 1. Cek unit usaha & status POS
-    let mut usahas = state.usahas.write().await;
-    let nama_unit = match usahas.iter().find(|u| u.id == payload.unit_id) {
-        Some(u) => {
-            if !u.has_pos {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(ApiResponse::<TransaksiModel> {
-                        status: "error".to_string(),
-                        message: format!("Unit usaha '{}' dinonaktifkan dari fitur POS Kasir.", u.nama),
-                        data: None,
-                    }),
-                );
-            }
-            u.nama.clone()
-        }
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(ApiResponse::<TransaksiModel> {
-                    status: "error".to_string(),
-                    message: "Unit usaha tidak ditemukan.".to_string(),
-                    data: None,
-                }),
-            );
-        }
-    };
-
-    // 2. Validasi stok produk
-    let mut produks = state.produks.write().await;
-    for item in &payload.items {
-        let p = match produks.iter().find(|p| p.id == item.produk_id) {
-            Some(prod) => prod,
-            None => {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(ApiResponse::<TransaksiModel> {
-                        status: "error".to_string(),
-                        message: format!("Produk ID #{} tidak ditemukan.", item.produk_id),
-                        data: None,
-                    }),
-                );
-            }
-        };
-
-        if p.stok < item.jumlah {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiResponse::<TransaksiModel> {
-                    status: "error".to_string(),
-                    message: format!(
-                        "Stok produk '{}' tidak mencukupi (Tersedia: {}, Diminta: {}).",
-                        p.nama, p.stok, item.jumlah
-                    ),
-                    data: None,
-                }),
-            );
-        }
+    // Siapkan items dalam format JSONB untuk dikirim ke Stored Procedure
+    let mut mapped_items: Vec<serde_json::Value> = Vec::new();
+    for it in &payload.items {
+        mapped_items.push(serde_json::json!({
+            "product_id": it.produk_id,
+            "qty": it.jumlah,
+            "harga_satuan": it.harga_satuan.unwrap_or(18000.0)
+        }));
     }
+    let items_json = serde_json::Value::Array(mapped_items);
 
-    // 3. Potong stok produk dan hitung total
-    let mut item_checkouts: Vec<ItemCheckout> = Vec::new();
-    let mut total_belanja: f64 = 0.0;
-
-    for item in &payload.items {
-        if let Some(p) = produks.iter_mut().find(|p| p.id == item.produk_id) {
-            p.stok -= item.jumlah;
-            let subtotal = p.harga_jual * (item.jumlah as f64);
-            total_belanja += subtotal;
-
-            item_checkouts.push(ItemCheckout {
-                produk_id: p.id,
-                nama_produk: p.nama.clone(),
-                harga_satuan: p.harga_jual,
-                jumlah: item.jumlah,
-                subtotal,
-            });
-        }
-    }
-    drop(produks);
-
-    // 4. Update pendapatan unit usaha
-    if let Some(u) = usahas.iter_mut().find(|u| u.id == payload.unit_id) {
-        u.pendapatan_bulan_ini += total_belanja;
-    }
-    drop(usahas);
-
-    let waktu_transaksi = Local::now().format("%Y-%m-%d %H:%M").to_string();
-
-    // 5. Update shift kasir jika ada shift aktif
-    let is_tunai = payload.metode_pembayaran.to_lowercase().contains("tunai")
-        || payload.metode_pembayaran.to_lowercase().contains("cash");
-
-    let mut shifts = state.shifts.write().await;
-    if let Some(s) = shifts
-        .iter_mut()
-        .find(|s| s.unit_id == payload.unit_id && s.status == StatusShift::Open)
-    {
-        if is_tunai {
-            s.total_penjualan_tunai += total_belanja;
-        } else {
-            s.total_penjualan_non_tunai += total_belanja;
-        }
-        s.total_transaksi += 1;
-    }
-    drop(shifts);
-
-    // 6. Catat Transaksi Penjualan
-    let mut transaksis = state.transaksis.write().await;
-    let trx_id = (transaksis.len() as i64) + 1;
-
-    let keterangan = payload.keterangan.unwrap_or_else(|| {
-        format!(
-            "Order POS #{} ({} item) - {}",
-            trx_id,
-            item_checkouts.len(),
-            payload.metode_pembayaran
-        )
-    });
-
-    let new_trx = TransaksiModel {
-        id: trx_id,
-        owner_id,
-        unit_id: payload.unit_id,
-        nama_unit: nama_unit.clone(),
-        tanggal: waktu_transaksi.clone(),
-        jenis: JenisTransaksi::Pemasukan,
-        kategori: "Penjualan POS".to_string(),
-        jumlah: total_belanja,
-        keterangan,
-        metode_pembayaran: Some(payload.metode_pembayaran),
-        items: Some(item_checkouts),
-    };
-
-    transaksis.push(new_trx.clone());
-    drop(transaksis);
-
-    // 7. Catat Audit Log
-    let mut logs = state.audit_logs.write().await;
-    let log_id = (logs.len() as i64) + 1;
-    logs.push(AuditLogModel {
-        id: log_id,
-        owner_id,
-        aktor: kasir_nama,
-        role: "kasir".to_string(),
-        aksi: "Transaksi POS".to_string(),
-        modul: "Kasir".to_string(),
-        target: nama_unit,
-        detail: format!("Transaksi Penjualan #{} sukses senilai Rp {:.0}", trx_id, total_belanja),
-        waktu: waktu_transaksi,
-    });
-
-    (
-        StatusCode::CREATED,
-        Json(ApiResponse::<TransaksiModel> {
-            status: "success".to_string(),
-            message: "Transaksi kasir berhasil diselesaikan dan stok telah dipotong secara real-time.".to_string(),
-            data: Some(new_trx),
-        }),
+    // Panggil Stored Procedure tunggal di PostgreSQL:
+    // Stored Procedure di dalam database otomatis memanggil:
+    // - Function fn_cek_ketersediaan_stok
+    // - Function fn_hitung_total_belanja
+    // - Trigger trg_kurangi_stok_inventaris
+    // - Trigger trg_update_omzet_unit
+    let result: Result<(Option<i32>, Option<rust_decimal::Decimal>, Option<String>, Option<String>), sqlx::Error> = sqlx::query_as(
+        "CALL sp_proses_checkout_kasir($1, $2, $3, $4, NULL, NULL, NULL, NULL)"
     )
+    .bind(payload.unit_id as i32)
+    .bind(user_id as i32)
+    .bind(&payload.metode_pembayaran)
+    .bind(items_json)
+    .fetch_one(&state.db)
+    .await;
+
+    match result {
+        Ok((trx_id_opt, total_opt, status_opt, pesan_opt)) => {
+            let status_str = status_opt.unwrap_or_else(|| "error".to_string());
+            let pesan_str = pesan_opt.unwrap_or_else(|| "Terjadi kesalahan sistem.".to_string());
+
+            if status_str == "error" {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiResponse::<TransaksiModel> {
+                        status: "error".to_string(),
+                        message: pesan_str,
+                        data: None,
+                    }),
+                );
+            }
+
+            let trx_id = trx_id_opt.unwrap_or(0) as i64;
+            use rust_decimal::prelude::ToPrimitive;
+            let total_belanja = total_opt.and_then(|d| d.to_f64()).unwrap_or(0.0);
+            let waktu_transaksi = Local::now().format("%Y-%m-%d %H:%M").to_string();
+
+            // Ambil nama unit usaha
+            let usahas = state.usahas.read().await;
+            let nama_unit = usahas.iter().find(|u| u.id == payload.unit_id).map(|u| u.nama.clone()).unwrap_or_else(|| "Unit Usaha".to_string());
+            drop(usahas);
+
+            let new_trx = TransaksiModel {
+                id: trx_id,
+                owner_id,
+                unit_id: payload.unit_id,
+                nama_unit,
+                tanggal: waktu_transaksi,
+                jenis: JenisTransaksi::Pemasukan,
+                kategori: "Penjualan POS".to_string(),
+                jumlah: total_belanja,
+                keterangan: payload.keterangan.unwrap_or_else(|| format!("Order POS #{} - {}", trx_id, payload.metode_pembayaran)),
+                metode_pembayaran: Some(payload.metode_pembayaran),
+                items: None,
+            };
+
+            (
+                StatusCode::CREATED,
+                Json(ApiResponse::<TransaksiModel> {
+                    status: "success".to_string(),
+                    message: "Transaksi berhasil diproses via Stored Procedure & Trigger PostgreSQL.".to_string(),
+                    data: Some(new_trx),
+                }),
+            )
+        }
+        Err(e) => {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<TransaksiModel> {
+                    status: "error".to_string(),
+                    message: format!("Gagal memanggil stored procedure database: {}", e),
+                    data: None,
+                }),
+            )
+        }
+    }
 }
 
 // 5. RIWAYAT TRANSAKSI (Filter unit_id & jenis)

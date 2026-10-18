@@ -78,50 +78,125 @@ pub async fn chat_ai(
     };
     drop(owners);
 
-    // Ambil data kontekstual bisnis
     let usahas = state.usahas.read().await;
     let total_usaha = usahas.iter().filter(|u| u.owner_id == owner_id).count();
     let total_omzet: f64 = usahas.iter().filter(|u| u.owner_id == owner_id).map(|u| u.pendapatan_bulan_ini).sum();
+    let total_pengeluaran: f64 = usahas.iter().filter(|u| u.owner_id == owner_id).map(|u| u.pengeluaran_bulan_ini).sum();
+    let laba_bersih = total_omzet - total_pengeluaran;
+
     let star_units: Vec<String> = usahas
         .iter()
         .filter(|u| u.owner_id == owner_id && u.kategori_portofolio == "Star")
         .map(|u| u.nama.clone())
         .collect();
+    let cash_cows: Vec<String> = usahas
+        .iter()
+        .filter(|u| u.owner_id == owner_id && u.kategori_portofolio == "Cash Cow")
+        .map(|u| u.nama.clone())
+        .collect();
+    let unit_names: Vec<String> = usahas
+        .iter()
+        .filter(|u| u.owner_id == owner_id)
+        .map(|u| format!("- {} ({}, Laba: Rp {:.0})", u.nama, u.jenis_usaha, u.pendapatan_bulan_ini - u.pengeluaran_bulan_ini))
+        .collect();
     drop(usahas);
 
     let produks = state.produks.read().await;
+    let total_produk = produks.iter().filter(|p| p.owner_id == owner_id).count();
     let produk_kritis: Vec<String> = produks
         .iter()
         .filter(|p| p.owner_id == owner_id && p.stok <= p.min_stok)
         .map(|p| format!("{} (sisa {})", p.nama, p.stok))
         .collect();
+    let produk_termahal = produks
+        .iter()
+        .filter(|p| p.owner_id == owner_id)
+        .max_by(|a, b| a.harga_jual.partial_cmp(&b.harga_jual).unwrap())
+        .map(|p| format!("{} (Harga: Rp {:.0})", p.nama, p.harga_jual));
     drop(produks);
 
+    let transaksis = state.transaksis.read().await;
+    let total_trx = transaksis.iter().filter(|t| t.owner_id == owner_id).count();
+    drop(transaksis);
+
     let query_lower = payload.pesan.to_lowercase();
-    let balasan = if query_lower.contains("omzet") || query_lower.contains("pendapatan") {
-        format!(
-            "Total omzet konsolidasi bulan ini di seluruh {} unit usaha Anda mencapai Rp {:.0}. Unit unggulan 'Star' saat ini adalah: {}.",
-            total_usaha, total_omzet, star_units.join(", ")
-        )
-    } else if query_lower.contains("stok") || query_lower.contains("gudang") || query_lower.contains("kritis") {
-        if produk_kritis.is_empty() {
-            "Semua stok produk saat ini dalam kondisi aman di atas batas minimum.".to_string()
+    let balasan = if query_lower.contains("omzet") || query_lower.contains("pendapatan") || query_lower.contains("penjualan") {
+        if total_usaha == 0 {
+            "Saat ini belum ada unit usaha yang didaftarkan ke sistem, sehingga total omzet masih Rp 0. Silakan tambahkan unit usaha di menu 'Kelola Unit Usaha'.".to_string()
         } else {
             format!(
-                "Peringatan Stok Kritis! Terdapat {} barang yang berada di bawah batas minimum: {}. Disarankan segera mengajukan permintaan stok atau transfer gudang.",
-                produk_kritis.len(), produk_kritis.join(", ")
+                "Berdasarkan data keuangan nyata saat ini:\n• Total Omzet Konsolidasi: Rp {:.0}\n• Total Pengeluaran: Rp {:.0}\n• Laba Bersih Agregat: Rp {:.0}\n• Jumlah Cabang Terdata: {} unit",
+                total_omzet, total_pengeluaran, laba_bersih, total_usaha
             )
         }
-    } else if query_lower.contains("saran") || query_lower.contains("rekomendasi") || query_lower.contains("strategi") {
+    } else if query_lower.contains("laba") || query_lower.contains("profit") || query_lower.contains("keuntungan") {
+        if total_usaha == 0 {
+            "Belum ada catatan transaksi dan unit usaha aktif. Laba bersih saat ini: Rp 0.".to_string()
+        } else {
+            let margin = if total_omzet > 0.0 { (laba_bersih / total_omzet) * 100.0 } else { 0.0 };
+            format!(
+                "Laba bersih operasional Anda saat ini sebesar Rp {:.0} dengan margin profit rata-rata {:.1}%. Keuangan dalam status {}.",
+                laba_bersih, margin, if laba_bersih >= 0.0 { "Sehat & Surplus" } else { "Defisit Operasional" }
+            )
+        }
+    } else if query_lower.contains("stok") || query_lower.contains("gudang") || query_lower.contains("barang") || query_lower.contains("kritis") {
+        if total_produk == 0 {
+            "Katalog produk saat ini masih kosong (0 barang). Anda dapat menambahkan produk inventaris lewat menu 'Katalog Produk' atau langsung di mesin Kasir POS.".to_string()
+        } else if produk_kritis.is_empty() {
+            format!(
+                "Kondisi gudang aman! Seluruh {} produk yang terdaftar saat ini berada di atas batas stok minimum aman.",
+                total_produk
+            )
+        } else {
+            format!(
+                "⚠️ PERINGATAN STOK MENIPIS! Ditemukan {} produk yang berada di batas kritis:\n• {}\nSegera lakukan pemesanan ke pemasok atau ajukan transfer stok antar gudang.",
+                produk_kritis.len(), produk_kritis.join("\n• ")
+            )
+        }
+    } else if query_lower.contains("cabang") || query_lower.contains("unit") || query_lower.contains("toko") || query_lower.contains("daftar") {
+        if total_usaha == 0 {
+            "Belum ada unit usaha/cabang yang aktif di sistem.".to_string()
+        } else {
+            format!(
+                "Berikut {} unit usaha yang terdaftar di grup bisnis '{}':\n{}",
+                total_usaha, owner.nama_bisnis_induk, unit_names.join("\n")
+            )
+        }
+    } else if query_lower.contains("saran") || query_lower.contains("rekomendasi") || query_lower.contains("strategi") || query_lower.contains("bcg") {
+        if total_usaha == 0 {
+            "Rekomendasi awal: Buat minimal 1-2 unit usaha pertama Anda (contoh: Kafe atau Retail) dan catat transaksi harian kasir agar AI dapat membaca pola arus kas dan memberikan rekomendasi ekspansi yang akurat.".to_string()
+        } else {
+            let unit_star = if !star_units.is_empty() { star_units.join(", ") } else { "belum ada".to_string() };
+            let unit_cash = if !cash_cows.is_empty() { cash_cows.join(", ") } else { "belum ada".to_string() };
+            format!(
+                "Rekomendasi Strategis AI Portofolio:\n1. Unit 'Star' ({}): Pertahankan alokasi stok dan ekspansi pemasaran karena pertumbuhan tinggi.\n2. Unit 'Cash Cow' ({}): Alirkan surplus kas operasional ke cabang yang sedang berkembang untuk mempercepat penetrasi pasar.",
+                unit_star, unit_cash
+            )
+        }
+    } else if query_lower.contains("transaksi") || query_lower.contains("kasir") || query_lower.contains("pos") {
         format!(
-            "Berdasarkan matriks BCG portofolio Anda, tingkatkan alokasi modal kerja pada unit kategori 'Star' ({}) untuk akselerasi pertumbuhan, serta lakukan efisiensi pengeluaran operasional pada unit kategori 'Question Mark'.",
-            star_units.join(", ")
+            "Total transaksi yang telah tercatat di sistem: {} transaksi. Anda bisa memantau detail riwayat penjualan di menu 'Transaksi Kas' atau buka shift di 'Mesin Kasir (POS)'.",
+            total_trx
+        )
+    } else if query_lower.contains("siapa kamu") || query_lower.contains("halo") || query_lower.contains("bisa apa") || query_lower.contains("fitur") {
+        format!(
+            "Halo Bpk/Ibu Owner! Saya adalah Asisten AI Business Intelligence terintegrasi untuk '{}'.\n\nSaya bisa membantu Anda menganalisa:\n1. 📊 Total Omzet, Arus Kas & Laba Bersih Konsolidasi\n2. 📦 Status Stok Gudang & Alert Stok Kritis\n3. 🏪 Evaluasi Performa dan Klasifikasi BCG Tiap Cabang\n4. 💡 Rekomendasi Alokasi Modal & Efisiensi Pengeluaran\n\nSilakan ketik pertanyaan Anda!",
+            owner.nama_bisnis_induk
         )
     } else {
-        format!(
-            "Halo Bpk/Ibu Owner! Asisten AI BI siap membantu memantau {} unit usaha Anda di {}. Anda dapat menanyakan ringkasan omzet, analisis stok menipis, evaluasi margin laba, atau proyeksi penjualan pekan depan.",
-            total_usaha, owner.nama_bisnis_induk
-        )
+        // Jawaban cerdas kontekstual jika pertanyaan di luar kata kunci spesifik
+        if total_usaha == 0 {
+            format!(
+                "Saya siap membantu menjawab pertanyaan Anda terkait '{}'. Karena sistem saat ini masih bersih (belum ada data unit usaha dan produk), Anda dapat mulai dengan menambahkan cabang di menu 'Kelola Unit Usaha'.",
+                owner.nama_bisnis_induk
+            )
+        } else {
+            let info_termahal = produk_termahal.map(|p| format!(", dengan produk terlaris/unggulan {}", p)).unwrap_or_default();
+            format!(
+                "Pertanyaan Anda: \"{}\"\n\nBerdasarkan data operasional '{}' ({} unit usaha, {} produk{}):\nOmzet berjalan bulan ini tercatat Rp {:.0} dengan laba bersih Rp {:.0}. Jika Anda ingin rincian lebih spesifik, Anda dapat menanyakan tentang 'omzet cabang', 'stok barang', atau 'rekomendasi strategi'.",
+                payload.pesan, owner.nama_bisnis_induk, total_usaha, total_produk, info_termahal, total_omzet, laba_bersih
+            )
+        }
     };
 
     (

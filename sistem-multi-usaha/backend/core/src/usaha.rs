@@ -124,7 +124,27 @@ pub async fn create_usaha(
         );
     }
 
-    let new_id = (usahas.len() as i64) + 1;
+    // Simpan permanen ke PostgreSQL
+    let row_id: Result<(i32,), sqlx::Error> = sqlx::query_as(
+        "INSERT INTO business_units (owner_id, nama, jenis_usaha, lokasi, kategori_portofolio, status, has_pos)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id"
+    )
+    .bind(owner_id as i32)
+    .bind(&payload.nama)
+    .bind(&payload.jenis_usaha)
+    .bind(&payload.lokasi)
+    .bind(payload.kategori_portofolio.as_deref().unwrap_or("Star"))
+    .bind(true)
+    .bind(payload.has_pos.unwrap_or(true))
+    .fetch_one(&state.db)
+    .await;
+
+    let new_id = match row_id {
+        Ok(r) => r.0 as i64,
+        Err(_) => (usahas.len() as i64) + 1,
+    };
+
     let new_usaha = UsahaModel {
         id: new_id,
         owner_id,
@@ -195,6 +215,19 @@ pub async fn update_usaha(
             u.has_pos = has_pos;
         }
 
+        let _ = sqlx::query(
+            "UPDATE business_units SET nama = $1, jenis_usaha = $2, lokasi = $3, kategori_portofolio = $4, status = $5, has_pos = $6 WHERE id = $7"
+        )
+        .bind(&u.nama)
+        .bind(&u.jenis_usaha)
+        .bind(&u.lokasi)
+        .bind(&u.kategori_portofolio)
+        .bind(u.status)
+        .bind(u.has_pos)
+        .bind(id as i32)
+        .execute(&state.db)
+        .await;
+
         return (
             StatusCode::OK,
             Json(ApiResponse::<UsahaModel> {
@@ -226,6 +259,12 @@ pub async fn toggle_pos(
         u.has_pos = !u.has_pos;
         let status_str = if u.has_pos { "Aktif" } else { "Non-Aktif" };
 
+        let _ = sqlx::query("UPDATE business_units SET has_pos = $1 WHERE id = $2")
+            .bind(u.has_pos)
+            .bind(id as i32)
+            .execute(&state.db)
+            .await;
+
         return (
             StatusCode::OK,
             Json(ApiResponse::<UsahaModel> {
@@ -256,6 +295,12 @@ pub async fn delete_usaha(
     usahas.retain(|u| u.id != id);
 
     if usahas.len() < initial_len {
+        // Hapus juga dari database PostgreSQL secara permanen
+        let _ = sqlx::query("DELETE FROM business_units WHERE id = $1")
+            .bind(id as i32)
+            .execute(&state.db)
+            .await;
+
         (
             StatusCode::OK,
             Json(ApiResponse::<()> {
