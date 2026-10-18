@@ -5,6 +5,7 @@ import '../models/notifikasi_model.dart';
 import '../providers/notifikasi_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
+import '../widgets/app_navigator.dart';
 import 'dashboard_screen.dart';
 
 class NotifikasiScreen extends StatelessWidget {
@@ -22,7 +23,7 @@ class NotifikasiScreen extends StatelessWidget {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: AppTheme.textPrimary),
-          onPressed: () => Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen())),
+          onPressed: () => AppNavigator.backToDashboard(context, const DashboardScreen()),
         ),
         title: Row(
           children: [

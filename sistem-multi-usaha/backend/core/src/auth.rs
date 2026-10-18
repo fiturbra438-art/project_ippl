@@ -17,7 +17,7 @@ use crate::schemas::{
 use crate::state::AppState;
 
 // Helper membuat JWT Token
-fn generate_token(
+pub fn generate_token(
     sub: &str,
     user_id: i64,
     role: &str,
@@ -45,6 +45,27 @@ fn generate_token(
         &EncodingKey::from_secret(secret.as_bytes()),
     )
     .map_err(|e| e.to_string())
+}
+
+// Helper validasi JWT Token dari Header
+pub fn extract_claims_from_token(token: &str, secret: &str) -> Result<Claims, String> {
+    use jsonwebtoken::{decode, DecodingKey, Validation};
+    let token_data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &Validation::default(),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(token_data.claims)
+}
+
+pub fn extract_claims(headers: &axum::http::HeaderMap, secret: &str) -> Option<Claims> {
+    if let Some(auth_header) = headers.get("Authorization").and_then(|h| h.to_str().ok()) {
+        if let Some(token) = auth_header.strip_prefix("Bearer ") {
+            return extract_claims_from_token(token, secret).ok();
+        }
+    }
+    None
 }
 
 // 1. REGISTER OWNER (Hanya Owner yang bisa register mandiri)

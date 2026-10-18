@@ -2,30 +2,8 @@ import 'package:flutter/material.dart';
 import '../models/permintaan_stok_model.dart';
 
 class PermintaanStokProvider extends ChangeNotifier {
-  final List<PermintaanStokModel> _daftarPermintaan = [
-    PermintaanStokModel(
-      id: 1,
-      unitId: 1,
-      namaUnit: 'Kedai Kopi Bahagia',
-      pemohon: 'Siti Rahma (Manager)',
-      namaProduk: 'Biji Kopi Arabika 1kg',
-      jumlahDiminta: 40,
-      alasan: 'Stok menipis jelang akhir pekan dan promo paket kopi',
-      waktuPengajuan: DateTime.now().subtract(const Duration(hours: 4)),
-      status: StatusPermintaanStok.pending,
-    ),
-    PermintaanStokModel(
-      id: 2,
-      unitId: 2,
-      namaUnit: 'Laundry Bersih Kilat',
-      pemohon: 'Manager Laundry',
-      namaProduk: 'Deterjen Cair Konsentrat 5L',
-      jumlahDiminta: 15,
-      alasan: 'Order borongan hotel bertambah',
-      waktuPengajuan: DateTime.now().subtract(const Duration(days: 1)),
-      status: StatusPermintaanStok.disetujui,
-    ),
-  ];
+  // Data bersih awal (0 permintaan stok)
+  final List<PermintaanStokModel> _daftarPermintaan = [];
 
   List<PermintaanStokModel> get daftarPermintaan => _daftarPermintaan;
 

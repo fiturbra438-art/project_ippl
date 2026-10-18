@@ -2,55 +2,13 @@ import 'package:flutter/material.dart';
 import '../models/usaha.dart';
 
 class UsahaProvider extends ChangeNotifier {
-  List<UsahaModel> _daftarUsaha = [
-    UsahaModel(
-      id: 1,
-      nama: 'Kedai Kopi Bahagia',
-      jenisUsaha: 'F&B / Kafe',
-      lokasi: 'Jl. Merdeka No. 12',
-      kategoriPortofolio: 'Star',
-      pendapatanBulanIni: 48500000,
-      pengeluaranBulanIni: 31200000,
-      pertumbuhanPersen: 14.8,
-      hasPos: true, // Pakai Kasir
-    ),
-    UsahaModel(
-      id: 2,
-      nama: 'Laundry Bersih Kilat',
-      jenisUsaha: 'Jasa Cuci',
-      lokasi: 'Jl. Pemuda No. 45',
-      kategoriPortofolio: 'Cash Cow',
-      pendapatanBulanIni: 32000000,
-      pengeluaranBulanIni: 15400000,
-      pertumbuhanPersen: 5.2,
-      hasPos: true, // Pakai Kasir
-    ),
-    UsahaModel(
-      id: 3,
-      nama: 'Toko Elektronik Digital',
-      jenisUsaha: 'Retail / Gadget',
-      lokasi: 'Mall Sentral Lt. 2',
-      kategoriPortofolio: 'Question Mark',
-      pendapatanBulanIni: 78900000,
-      pengeluaranBulanIni: 71000000,
-      pertumbuhanPersen: 22.4,
-      hasPos: true, // Pakai Kasir
-    ),
-    UsahaModel(
-      id: 4,
-      nama: 'Distribusi Bahan Pokok',
-      jenisUsaha: 'Gudang & Grosir',
-      lokasi: 'Kawasan Industri Blok C',
-      kategoriPortofolio: 'Cash Cow',
-      pendapatanBulanIni: 125000000,
-      pengeluaranBulanIni: 98000000,
-      pertumbuhanPersen: 8.1,
-      hasPos: false, // Tidak Pakai Kasir (Gudang/Distribusi murni)
-    ),
-  ];
+  // Data bersih awal (0 unit usaha, diinput oleh pengguna)
+  List<UsahaModel> _daftarUsaha = [];
 
   String _searchQuery = '';
   String _filterKategori = 'Semua';
+
+  List<UsahaModel> get rawDaftarUsaha => _daftarUsaha;
 
   List<UsahaModel> get daftarUsaha {
     return _daftarUsaha.where((item) {
@@ -62,6 +20,14 @@ class UsahaProvider extends ChangeNotifier {
       
       return matchesSearch && matchesCategory;
     }).toList();
+  }
+
+  // Filter unit yang hanya diizinkan untuk akun karyawan tertentu (Owner & Auditor bisa akses semua)
+  List<UsahaModel> getDaftarUsahaForUser(List<int> unitAksesIds, bool isOwnerOrAuditor) {
+    if (isOwnerOrAuditor || unitAksesIds.isEmpty) {
+      return daftarUsaha;
+    }
+    return daftarUsaha.where((u) => unitAksesIds.contains(u.id)).toList();
   }
 
   String get searchQuery => _searchQuery;

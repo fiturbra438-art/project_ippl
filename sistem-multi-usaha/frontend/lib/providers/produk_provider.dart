@@ -2,48 +2,8 @@ import 'package:flutter/material.dart';
 import '../models/produk.dart';
 
 class ProdukProvider extends ChangeNotifier {
-  final List<ProdukModel> _daftarProduk = [
-    ProdukModel(
-      id: 1,
-      unitId: 1,
-      nama: 'Biji Kopi Arabika 1kg',
-      sku: 'KOP-ARA-001',
-      hargaBeli: 90000,
-      hargaJual: 135000,
-      stok: 24,
-      minStok: 5,
-    ),
-    ProdukModel(
-      id: 2,
-      unitId: 1,
-      nama: 'Syrup Karamel Gourmet 750ml',
-      sku: 'SYR-KRM-002',
-      hargaBeli: 65000,
-      hargaJual: 95000,
-      stok: 4, // Kritis
-      minStok: 5,
-    ),
-    ProdukModel(
-      id: 3,
-      unitId: 2,
-      nama: 'Deterjen Cair Konsentrat 5L',
-      sku: 'LND-DET-001',
-      hargaBeli: 55000,
-      hargaJual: 80000,
-      stok: 18,
-      minStok: 6,
-    ),
-    ProdukModel(
-      id: 4,
-      unitId: 3,
-      nama: 'Fast Charger Type-C 30W',
-      sku: 'ELK-CHG-003',
-      hargaBeli: 45000,
-      hargaJual: 89000,
-      stok: 35,
-      minStok: 8,
-    ),
-  ];
+  // Data bersih awal (0 produk katalog)
+  final List<ProdukModel> _daftarProduk = [];
 
   int _selectedUnitFilter = 0; // 0 = Semua
   String _searchQuery = '';

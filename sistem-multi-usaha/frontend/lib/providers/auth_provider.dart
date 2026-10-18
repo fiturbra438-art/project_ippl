@@ -16,6 +16,7 @@ class AuthProvider extends ChangeNotifier {
   bool _isAwaiting2FA = false;
   String _tempEmail = '';
 
+  // Hanya sediakan akun Owner utama awal (Karyawan ditambahkan oleh Owner lewat UI)
   final List<UserModel> _penggunaList = [
     UserModel(
       id: 1,
@@ -25,78 +26,9 @@ class AuthProvider extends ChangeNotifier {
       unitAksesIds: [],
       is2FAAktif: true,
     ),
-    UserModel(
-      id: 2,
-      nama: 'Siti Rahma',
-      email: 'manager.kafe@multi-usaha.com',
-      role: UserRole.manager,
-      unitAksesIds: [1], // Kedai Kopi Bahagia
-    ),
-    UserModel(
-      id: 3,
-      nama: 'Andi Pratama',
-      email: 'kasir.kafe@multi-usaha.com',
-      role: UserRole.kasir,
-      unitAksesIds: [1],
-    ),
-    UserModel(
-      id: 4,
-      nama: 'Hendra Wijaya',
-      email: 'gudang@multi-usaha.com',
-      role: UserRole.adminGudang,
-      unitAksesIds: [1, 2, 3],
-    ),
-    UserModel(
-      id: 5,
-      nama: 'Dewi Lestari',
-      email: 'auditor@multi-usaha.com',
-      role: UserRole.auditor,
-      unitAksesIds: [],
-    ),
   ];
 
-  final List<AuditLogModel> _auditLogs = [
-    AuditLogModel(
-      id: 1,
-      aktor: 'Budi Santoso',
-      role: UserRole.owner,
-      aksi: 'UBAH_HAK_AKSES',
-      modul: 'PENGGUNA',
-      target: 'Siti Rahma',
-      detail: 'Menambahkan akses ke unit Kedai Kopi Bahagia',
-      waktu: DateTime.now().subtract(const Duration(minutes: 25)),
-    ),
-    AuditLogModel(
-      id: 2,
-      aktor: 'Siti Rahma',
-      role: UserRole.manager,
-      aksi: 'PERMINTAAN_STOK',
-      modul: 'GUDANG',
-      target: 'Biji Kopi Arabika 1kg',
-      detail: 'Mengajukan restok 50 unit ke Gudang Pusat',
-      waktu: DateTime.now().subtract(const Duration(hours: 2)),
-    ),
-    AuditLogModel(
-      id: 3,
-      aktor: 'Andi Pratama',
-      role: UserRole.kasir,
-      aksi: 'TUTUP_SHIFT',
-      modul: 'KASIR_POS',
-      target: 'Shift Pagi Kedai Kopi',
-      detail: 'Total laci kas Rp 1.850.000, selisih Rp 0 (Cocok)',
-      waktu: DateTime.now().subtract(const Duration(hours: 4)),
-    ),
-    AuditLogModel(
-      id: 4,
-      aktor: 'Hendra Wijaya',
-      role: UserRole.adminGudang,
-      aksi: 'TRANSFER_STOK',
-      modul: 'GUDANG',
-      target: 'Fast Charger 30W',
-      detail: 'Kirim 20 unit dari Gudang ke Toko Digital',
-      waktu: DateTime.now().subtract(const Duration(hours: 6)),
-    ),
-  ];
+  final List<AuditLogModel> _auditLogs = [];
 
   UserModel? get currentUser => _currentUser;
   bool get isAuthenticated => _currentUser != null;
@@ -104,6 +36,12 @@ class AuthProvider extends ChangeNotifier {
   int? get selectedUnitId => _selectedUnitId;
   List<UserModel> get penggunaList => _penggunaList;
   List<AuditLogModel> get auditLogs => _auditLogs;
+
+  // Cek apakah pengguna saat ini berhak mengatur harga modal & harga jual (Hanya Manager & Owner)
+  bool get canManagePrices {
+    if (_currentUser == null) return false;
+    return _currentUser!.role == UserRole.owner || _currentUser!.role == UserRole.manager;
+  }
 
   void setSelectedUnit(int? unitId) {
     _selectedUnitId = unitId;
@@ -200,7 +138,37 @@ class AuthProvider extends ChangeNotifier {
 
   void tambahPengguna(UserModel user) {
     _penggunaList.add(user);
-    addAuditLog('TAMBAH_PENGGUNA', 'PENGGUNA', user.email, 'Membuat user role ${user.role.label}');
+    addAuditLog('TAMBAH_PENGGUNA', 'PENGGUNA', user.email, 'Owner menetapkan role ${user.role.label} pada unit ${user.unitAksesIds}');
+    notifyListeners();
+  }
+
+  void updatePenggunaAkses({
+    required int id,
+    required String nama,
+    required UserRole role,
+    required List<int> unitAksesIds,
+    required bool isAktif,
+  }) {
+    final idx = _penggunaList.indexWhere((u) => u.id == id);
+    if (idx != -1) {
+      _penggunaList[idx] = UserModel(
+        id: id,
+        nama: nama,
+        email: _penggunaList[idx].email,
+        role: role,
+        unitAksesIds: unitAksesIds,
+        isAktif: isAktif,
+        is2FAAktif: _penggunaList[idx].is2FAAktif,
+      );
+      addAuditLog('UPDATE_HAK_AKSES', 'PENGGUNA', _penggunaList[idx].email, 'Owner memperbarui posisi menjadi ${role.label} & penempatan unit $unitAksesIds');
+      notifyListeners();
+    }
+  }
+
+  void hapusPengguna(int id) {
+    final user = _penggunaList.firstWhere((u) => u.id == id, orElse: () => _penggunaList.first);
+    _penggunaList.removeWhere((u) => u.id == id);
+    addAuditLog('HAPUS_PENGGUNA', 'PENGGUNA', user.email, 'Owner mencabut seluruh akses akun');
     notifyListeners();
   }
 

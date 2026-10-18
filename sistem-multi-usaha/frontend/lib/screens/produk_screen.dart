@@ -136,7 +136,36 @@ class ProdukScreen extends StatelessWidget {
     final currency = NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
 
     if (provider.daftarProduk.isEmpty) {
-      return const Center(child: Text('Tidak ada produk yang sesuai kriteria.', style: TextStyle(color: AppTheme.textSecondary)));
+      return Center(
+        child: Container(
+          padding: const EdgeInsets.all(32),
+          decoration: BoxDecoration(
+            color: AppTheme.surfaceWhite,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppTheme.cardBorder),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.inventory_2_outlined, size: 56, color: AppTheme.primaryBlue),
+              const SizedBox(height: 16),
+              const Text('Katalog Produk Masih Kosong', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
+              const SizedBox(height: 6),
+              const Text(
+                'Belum ada barang atau menu yang didaftarkan ke inventaris sistem.\nKlik tombol di bawah untuk menambahkan produk pertama Anda.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 18),
+              ElevatedButton.icon(
+                onPressed: () => _showTambahProdukDialog(context),
+                icon: const Icon(Icons.add_rounded, size: 18),
+                label: const Text('Tambah Produk Baru'),
+              ),
+            ],
+          ),
+        ),
+      );
     }
 
     if (isMobile) {

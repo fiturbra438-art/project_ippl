@@ -21,10 +21,10 @@ class PosProvider extends ChangeNotifier {
   int _activeUnitId = 1;
   String _activeUnitNama = 'Kedai Kopi Bahagia';
 
-  // Tutup Shift Data
-  double _modalAwal = 500000; // Rp 500.000 kas awal di laci
-  double _totalPenjualanShift = 1850000;
-  bool _shiftIsOpen = true;
+  // Tutup Shift Data (Awal 0)
+  double _modalAwal = 0.0;
+  double _totalPenjualanShift = 0.0;
+  bool _shiftIsOpen = false;
 
   List<CartItem> get keranjang => _keranjang;
   double get diskonPersen => _diskonPersen;

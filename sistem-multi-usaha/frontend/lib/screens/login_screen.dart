@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
+import '../widgets/app_navigator.dart';
 import 'dashboard_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -36,7 +37,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted) {
         setState(() => _isLoading = false);
         if (ok) {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
+          AppNavigator.pushReplacementFullscreen(context, const DashboardScreen());
         } else {
           setState(() => _errorMessage = 'Kode 2FA salah atau kurang dari 4 digit.');
         }
@@ -61,7 +62,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted) {
         setState(() => _isLoading = false);
         if (ok) {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
+          AppNavigator.pushReplacementFullscreen(context, const DashboardScreen());
         }
       }
     } else {
@@ -70,7 +71,7 @@ class _LoginScreenState extends State<LoginScreen> {
         setState(() => _isLoading = false);
         if (ok) {
           if (!auth.isAwaiting2FA) {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
+            AppNavigator.pushReplacementFullscreen(context, const DashboardScreen());
           }
         } else {
           setState(() => _errorMessage = 'Email atau password salah (minimal 6 karakter).');

@@ -23,6 +23,17 @@ class AppSidebar extends StatelessWidget {
 
   const AppSidebar({super.key, required this.activeRoute});
 
+  void _navigateWithoutAnimation(BuildContext context, Widget targetScreen) {
+    Navigator.pushReplacement(
+      context,
+      PageRouteBuilder(
+        pageBuilder: (context, _, __) => targetScreen,
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
@@ -62,49 +73,49 @@ class AppSidebar extends StatelessWidget {
               children: [
                 _buildItem(context, 'Dashboard', Icons.dashboard_rounded, activeRoute == 'dashboard', () {
                   if (activeRoute != 'dashboard') {
-                    Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
+                    _navigateWithoutAnimation(context, const DashboardScreen());
                   }
                 }),
                 if (role == UserRole.owner || role == UserRole.manager)
                   _buildItem(context, 'Kelola Unit Usaha', Icons.storefront_rounded, activeRoute == 'usaha', () {
                     if (activeRoute != 'usaha') {
-                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const UsahaScreen()));
+                      _navigateWithoutAnimation(context, const UsahaScreen());
                     }
                   }),
                 if (role == UserRole.owner || role == UserRole.kasir)
                   _buildItem(context, 'Kasir (POS)', Icons.point_of_sale_rounded, activeRoute == 'pos', () {
                     if (activeRoute != 'pos') {
-                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const PosScreen()));
+                      _navigateWithoutAnimation(context, const PosScreen());
                     }
                   }),
                 if (role == UserRole.owner || role == UserRole.adminGudang)
                   _buildItem(context, 'Gudang & Transfer', Icons.warehouse_rounded, activeRoute == 'gudang', () {
                     if (activeRoute != 'gudang') {
-                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const GudangScreen()));
+                      _navigateWithoutAnimation(context, const GudangScreen());
                     }
                   }),
                 if (role == UserRole.owner || role == UserRole.adminGudang || role == UserRole.manager)
                   _buildItem(context, 'Katalog Produk', Icons.inventory_2_rounded, activeRoute == 'produk', () {
                     if (activeRoute != 'produk') {
-                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ProdukScreen()));
+                      _navigateWithoutAnimation(context, const ProdukScreen());
                     }
                   }),
                 if (role == UserRole.owner || role == UserRole.manager)
                   _buildItem(context, 'Permintaan Stok', Icons.add_shopping_cart_rounded, activeRoute == 'permintaan_stok', () {
                     if (activeRoute != 'permintaan_stok') {
-                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const PermintaanStokScreen()));
+                      _navigateWithoutAnimation(context, const PermintaanStokScreen());
                     }
                   }),
                 if (role == UserRole.owner || role == UserRole.kasir || role == UserRole.manager)
                   _buildItem(context, 'Transaksi Kas', Icons.receipt_long_rounded, activeRoute == 'transaksi', () {
                     if (activeRoute != 'transaksi') {
-                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const TransaksiScreen()));
+                      _navigateWithoutAnimation(context, const TransaksiScreen());
                     }
                   }),
                 if (role == UserRole.owner || role == UserRole.manager || role == UserRole.auditor)
                   _buildItem(context, 'Laporan Keuangan', Icons.assessment_rounded, activeRoute == 'laporan', () {
                     if (activeRoute != 'laporan') {
-                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LaporanScreen()));
+                      _navigateWithoutAnimation(context, const LaporanScreen());
                     }
                   }),
                 if (role == UserRole.owner) ...[
@@ -114,27 +125,27 @@ class AppSidebar extends StatelessWidget {
                   ),
                   _buildItem(context, 'AI Suite (Owner)', Icons.auto_awesome_rounded, activeRoute == 'ai_hub', () {
                     if (activeRoute != 'ai_hub') {
-                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const AiHubScreen()));
+                      _navigateWithoutAnimation(context, const AiHubScreen());
                     }
                   }),
                   _buildItem(context, 'Portofolio BCG', Icons.pie_chart_rounded, activeRoute == 'portofolio', () {
                     if (activeRoute != 'portofolio') {
-                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const PortofolioScreen()));
+                      _navigateWithoutAnimation(context, const PortofolioScreen());
                     }
                   }),
                   _buildItem(context, 'Forecasting AI', Icons.trending_up_rounded, activeRoute == 'forecast', () {
                     if (activeRoute != 'forecast') {
-                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ForecastScreen()));
+                      _navigateWithoutAnimation(context, const ForecastScreen());
                     }
                   }),
                   _buildItem(context, 'Chatbot BI AI', Icons.smart_toy_rounded, activeRoute == 'chat_ai', () {
                     if (activeRoute != 'chat_ai') {
-                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ChatAiScreen()));
+                      _navigateWithoutAnimation(context, const ChatAiScreen());
                     }
                   }),
                   _buildItem(context, 'Kelola Pengguna', Icons.manage_accounts_rounded, activeRoute == 'users', () {
                     if (activeRoute != 'users') {
-                      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const UserManagementScreen()));
+                      _navigateWithoutAnimation(context, const UserManagementScreen());
                     }
                   }),
                 ],

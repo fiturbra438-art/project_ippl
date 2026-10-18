@@ -132,7 +132,36 @@ class TransaksiScreen extends StatelessWidget {
     final dateFormat = DateFormat('dd MMM yyyy, HH:mm');
 
     if (provider.daftarTransaksi.isEmpty) {
-      return const Center(child: Text('Belum ada transaksi pada kategori ini.', style: TextStyle(color: AppTheme.textSecondary)));
+      return Center(
+        child: Container(
+          padding: const EdgeInsets.all(32),
+          decoration: BoxDecoration(
+            color: AppTheme.surfaceWhite,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppTheme.cardBorder),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.receipt_long_outlined, size: 56, color: AppTheme.primaryBlue),
+              const SizedBox(height: 16),
+              const Text('Belum Ada Riwayat Transaksi', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
+              const SizedBox(height: 6),
+              const Text(
+                'Arus kas masuk atau keluar dari penjualan POS dan pencatatan manual akan tampil di sini secara real-time.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+              ),
+              const SizedBox(height: 18),
+              ElevatedButton.icon(
+                onPressed: () => _showTambahTransaksiDialog(context),
+                icon: const Icon(Icons.add_rounded, size: 18),
+                label: const Text('Catat Transaksi Manual'),
+              ),
+            ],
+          ),
+        ),
+      );
     }
 
     return ListView.separated(

@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../models/produk.dart';
+import '../models/user_model.dart';
+import '../providers/auth_provider.dart';
 import '../providers/pos_provider.dart';
 import '../providers/produk_provider.dart';
 import '../providers/usaha_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
+import '../widgets/app_navigator.dart';
 import 'dashboard_screen.dart';
 
 class PosScreen extends StatefulWidget {
@@ -31,7 +34,7 @@ class _PosScreenState extends State<PosScreen> {
         elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back, color: AppTheme.textPrimary),
-          onPressed: () => Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen())),
+          onPressed: () => AppNavigator.backToDashboard(context, const DashboardScreen()),
         ),
         title: Row(
           children: [
@@ -47,16 +50,23 @@ class _PosScreenState extends State<PosScreen> {
               child: DropdownButtonHideUnderline(
                 child: DropdownButton<int>(
                   value: pos.activeUnitId,
-                  items: context
-                      .watch<UsahaProvider>()
-                      .daftarUsaha
-                      .where((u) => u.hasPos) // Hanya unit yang mengaktifkan fitur kasir
-                      .map((u) {
-                    return DropdownMenuItem<int>(
-                      value: u.id,
-                      child: Text('📍 ${u.nama}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryBlue)),
-                    );
-                  }).toList(),
+                  items: () {
+                    final auth = context.watch<AuthProvider>();
+                    final usahaProv = context.watch<UsahaProvider>();
+                    final currentUser = auth.currentUser;
+                    final isOwnerOrAuditor = currentUser?.role == UserRole.owner || currentUser?.role == UserRole.auditor;
+                    final unitAkses = currentUser?.unitAksesIds ?? [];
+
+                    return usahaProv
+                        .getDaftarUsahaForUser(unitAkses, isOwnerOrAuditor)
+                        .where((u) => u.hasPos) // Hanya unit yang boleh diakses karyawan & punya kasir
+                        .map((u) {
+                      return DropdownMenuItem<int>(
+                        value: u.id,
+                        child: Text('📍 ${u.nama}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryBlue)),
+                      );
+                    }).toList();
+                  }(),
                   onChanged: (val) {
                     if (val != null) {
                       final selected = context.read<UsahaProvider>().daftarUsaha.firstWhere((u) => u.id == val);
@@ -225,6 +235,30 @@ class _PosScreenState extends State<PosScreen> {
             }
           },
         ),
+        const SizedBox(width: 10),
+        ElevatedButton.icon(
+          onPressed: () => _showTambahBarangDialog(context),
+          icon: Icon(
+            context.watch<AuthProvider>().canManagePrices
+                ? Icons.add_rounded
+                : Icons.lock_outline_rounded,
+            size: 18,
+          ),
+          label: Text(
+            context.watch<AuthProvider>().canManagePrices
+                ? 'Tambah Barang (Manager)'
+                : 'Tambah Barang',
+            style: const TextStyle(fontSize: 13),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: context.watch<AuthProvider>().canManagePrices
+                ? AppTheme.primaryBlue
+                : const Color(0xFF64748B),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
       ],
     );
   }
@@ -233,7 +267,32 @@ class _PosScreenState extends State<PosScreen> {
     final produkList = context.watch<ProdukProvider>().daftarProduk;
 
     if (produkList.isEmpty) {
-      return const Center(child: Text('Produk tidak ditemukan'));
+      return Center(
+        child: Container(
+          padding: const EdgeInsets.all(28),
+          decoration: BoxDecoration(
+            color: AppTheme.surfaceWhite,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppTheme.cardBorder),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.point_of_sale_rounded, size: 48, color: AppTheme.textMuted),
+              const SizedBox(height: 12),
+              const Text('Katalog Kasir Masih Kosong', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              const SizedBox(height: 4),
+              const Text('Tambahkan barang jualan atau menu pertama Anda melalui tombol di atas.', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              const SizedBox(height: 14),
+              ElevatedButton.icon(
+                onPressed: () => _showTambahBarangDialog(context),
+                icon: const Icon(Icons.add_rounded, size: 16),
+                label: const Text('Tambah Menu Sekarang'),
+              ),
+            ],
+          ),
+        ),
+      );
     }
 
     return GridView.builder(
@@ -550,6 +609,316 @@ class _PosScreenState extends State<PosScreen> {
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Shift kasir berhasil ditutup & dicatat ke sistem')));
                 },
                 child: const Text('Konfirmasi Tutup Shift'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  void _showTambahBarangDialog(BuildContext context) {
+    final auth = context.read<AuthProvider>();
+    final isManagerOrOwner = auth.canManagePrices;
+    final userRoleLabel = auth.currentUser?.role.label ?? 'Kasir';
+
+    final namaCtrl = TextEditingController();
+    final skuCtrl = TextEditingController();
+    final hargaBeliCtrl = TextEditingController();
+    final hargaJualCtrl = TextEditingController();
+    final marginPercentCtrl = TextEditingController(text: '40');
+    final stokCtrl = TextEditingController(text: '10');
+    final minStokCtrl = TextEditingController(text: '5');
+
+    final pos = context.read<PosProvider>();
+    final activeUnitId = pos.activeUnitId;
+    final activeUnitNama = pos.activeUnitNama;
+
+    // Generate random SKU default
+    skuCtrl.text = 'PRD-${DateTime.now().millisecondsSinceEpoch.toString().substring(8)}';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (dialogCtx, setDialogState) {
+          void hitungHargaJualOtomatis() {
+            final beli = double.tryParse(hargaBeliCtrl.text) ?? 0.0;
+            final marginPct = double.tryParse(marginPercentCtrl.text) ?? 0.0;
+            if (beli > 0) {
+              final jual = beli + (beli * (marginPct / 100.0));
+              hargaJualCtrl.text = jual.round().toString();
+            }
+          }
+
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: isManagerOrOwner ? AppTheme.lightBlueBg : const Color(0xFFFEF3C7),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    isManagerOrOwner ? Icons.add_shopping_cart_rounded : Icons.lock_person_rounded,
+                    color: isManagerOrOwner ? AppTheme.primaryBlue : const Color(0xFFD97706),
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Tambah Produk Kasir', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      Text(
+                        isManagerOrOwner
+                            ? 'Otoritas: $userRoleLabel (Berhak Atur HPP & Margin)'
+                            : 'Login: $userRoleLabel (Harga Ditentukan oleh Manager)',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: isManagerOrOwner ? AppTheme.primaryBlue : const Color(0xFFD97706),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 480,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF1F5F9),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.storefront_rounded, size: 16, color: AppTheme.textSecondary),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Unit Usaha: $activeUnitNama (ID #$activeUnitId)',
+                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: namaCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Nama Produk / Menu *',
+                        hintText: 'Contoh: Es Kopi Susu Aren',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: skuCtrl,
+                            decoration: const InputDecoration(
+                              labelText: 'Kode / SKU *',
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: TextField(
+                            controller: stokCtrl,
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'Stok Awal *',
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+
+                    // KOTAK PENGATURAN HARGA BERDASARKAN WEWENANG MANAGER VS KASIR
+                    if (isManagerOrOwner) ...[
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppTheme.lightBlueBg.withAlpha(80),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: AppTheme.secondaryBlue.withAlpha(60)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: const [
+                                Text('Kalkulator Harga & Margin (Manager)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryBlue)),
+                                Text('Rumus: Modal + Target Margin', style: TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                Expanded(
+                                  flex: 3,
+                                  child: TextField(
+                                    controller: hargaBeliCtrl,
+                                    keyboardType: TextInputType.number,
+                                    onChanged: (_) => setDialogState(hitungHargaJualOtomatis),
+                                    decoration: const InputDecoration(
+                                      labelText: 'Harga Modal/HPP (Rp) *',
+                                      hintText: '10000',
+                                      filled: true,
+                                      fillColor: Colors.white,
+                                      border: OutlineInputBorder(),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  flex: 2,
+                                  child: TextField(
+                                    controller: marginPercentCtrl,
+                                    keyboardType: TextInputType.number,
+                                    onChanged: (_) => setDialogState(hitungHargaJualOtomatis),
+                                    decoration: const InputDecoration(
+                                      labelText: 'Margin %',
+                                      hintText: '40',
+                                      suffixText: '%',
+                                      filled: true,
+                                      fillColor: Colors.white,
+                                      border: OutlineInputBorder(),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            TextField(
+                              controller: hargaJualCtrl,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                labelText: 'Harga Jual ke Pelanggan (Rp) *',
+                                hintText: '14000',
+                                filled: true,
+                                fillColor: Colors.white,
+                                border: OutlineInputBorder(),
+                                prefixIcon: Icon(Icons.sell_rounded, color: AppTheme.accentGreen),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ] else ...[
+                      // JIKA LOGIN SEBAGAI KASIR BIASA:
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF3C7),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFFFDE68A)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: const [
+                                Icon(Icons.info_outline_rounded, size: 16, color: Color(0xFFD97706)),
+                                SizedBox(width: 6),
+                                Expanded(
+                                  child: Text(
+                                    'Harga Modal dirahasiakan & telah ditentukan oleh Manager.',
+                                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFFD97706)),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: hargaJualCtrl,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                labelText: 'Harga Jual Standar Menu (Rp) *',
+                                hintText: '15000',
+                                filled: true,
+                                fillColor: Colors.white,
+                                border: OutlineInputBorder(),
+                                prefixIcon: Icon(Icons.sell_rounded, color: AppTheme.primaryBlue),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: minStokCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Batas Stok Kritis Minimum',
+                        hintText: '5',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
+              ElevatedButton(
+                onPressed: () {
+                  if (namaCtrl.text.trim().isEmpty || hargaJualCtrl.text.trim().isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Nama barang dan harga jual wajib diisi!')),
+                    );
+                    return;
+                  }
+
+                  // Jika kasir menambah barang, harga modal diestimasi aman (65% harga jual) atau 0
+                  final parsedJual = double.tryParse(hargaJualCtrl.text) ?? 0.0;
+                  final double hargaBeli = isManagerOrOwner
+                      ? (double.tryParse(hargaBeliCtrl.text) ?? (parsedJual * 0.65))
+                      : (parsedJual * 0.65); // Estimasi HPP otomatis untuk kasir
+
+                  final stok = int.tryParse(stokCtrl.text) ?? 10;
+                  final minStok = int.tryParse(minStokCtrl.text) ?? 5;
+
+                  final produkBaru = ProdukModel(
+                    id: DateTime.now().millisecondsSinceEpoch,
+                    unitId: activeUnitId,
+                    nama: namaCtrl.text.trim(),
+                    sku: skuCtrl.text.trim(),
+                    hargaBeli: hargaBeli,
+                    hargaJual: parsedJual,
+                    stok: stok,
+                    minStok: minStok,
+                  );
+
+                  context.read<ProdukProvider>().tambahProduk(produkBaru);
+                  Navigator.pop(ctx);
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      backgroundColor: AppTheme.primaryBlue,
+                      content: Text('Produk "${produkBaru.nama}" berhasil didaftarkan (Harga Jual: Rp ${parsedJual.round()})!'),
+                    ),
+                  );
+                },
+                child: const Text('Simpan Produk'),
               ),
             ],
           );

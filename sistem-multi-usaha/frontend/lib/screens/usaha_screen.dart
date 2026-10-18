@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../models/usaha.dart';
+import '../models/user_model.dart';
+import '../providers/auth_provider.dart';
 import '../providers/usaha_provider.dart';
 import '../providers/pos_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
 import '../widgets/app_sidebar.dart';
+import '../widgets/app_navigator.dart';
 import 'dashboard_screen.dart';
 import 'pos_screen.dart';
 
@@ -158,19 +161,64 @@ class UsahaScreen extends StatelessWidget {
 
   Widget _buildUsahaList(BuildContext context, bool isMobile) {
     final provider = context.watch<UsahaProvider>();
+    final auth = context.watch<AuthProvider>();
     final currency = NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
 
-    if (provider.daftarUsaha.isEmpty) {
-      return const Center(
-        child: Text('Tidak ada unit usaha yang sesuai pencarian.', style: TextStyle(color: AppTheme.textSecondary)),
+    final currentUser = auth.currentUser;
+    final bool isOwnerOrAuditor = currentUser?.role == UserRole.owner || currentUser?.role == UserRole.auditor;
+    final List<int> unitAksesIds = currentUser?.unitAksesIds ?? [];
+
+    // Filter unit usaha berdasarkan penempatan wewenang oleh Owner
+    final displayList = provider.getDaftarUsahaForUser(unitAksesIds, isOwnerOrAuditor);
+
+    if (displayList.isEmpty) {
+      return Center(
+        child: Container(
+          padding: const EdgeInsets.all(32),
+          decoration: BoxDecoration(
+            color: AppTheme.surfaceWhite,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppTheme.cardBorder),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.storefront_outlined, size: 56, color: AppTheme.primaryBlue),
+              const SizedBox(height: 16),
+              Text(
+                isOwnerOrAuditor
+                    ? 'Belum Ada Unit Usaha Terdaftar'
+                    : 'Akses Unit Usaha Belum Diberikan',
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                isOwnerOrAuditor
+                    ? 'Klik tombol "Tambah Unit Usaha" di atas untuk mendaftarkan cabang baru, kafe, retail, atau gudang Anda.'
+                    : 'Hubungi Owner bisnis untuk menambahkan penempatan akun Anda ke cabang unit usaha yang dikelola.',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+              ),
+              if (isOwnerOrAuditor) ...[
+                const SizedBox(height: 18),
+                ElevatedButton.icon(
+                  onPressed: () => _showTambahUsahaDialog(context),
+                  icon: const Icon(Icons.add_rounded, size: 18),
+                  label: const Text('Tambah Unit Usaha Sekarang'),
+                ),
+              ],
+            ],
+          ),
+        ),
       );
     }
 
     if (isMobile) {
       return ListView.separated(
-        itemCount: provider.daftarUsaha.length,
+        itemCount: displayList.length,
         separatorBuilder: (_, __) => const SizedBox(height: 12),
-        itemBuilder: (context, index) => _buildCardMobile(context, provider.daftarUsaha[index], currency),
+        itemBuilder: (context, index) => _buildCardMobile(context, displayList[index], currency),
       );
     }
 
@@ -181,8 +229,8 @@ class UsahaScreen extends StatelessWidget {
         crossAxisSpacing: 16,
         mainAxisSpacing: 16,
       ),
-      itemCount: provider.daftarUsaha.length,
-      itemBuilder: (context, index) => _buildCardDesktop(context, provider.daftarUsaha[index], currency),
+      itemCount: displayList.length,
+      itemBuilder: (context, index) => _buildCardDesktop(context, displayList[index], currency),
     );
   }
 
@@ -260,7 +308,7 @@ class UsahaScreen extends StatelessWidget {
                 OutlinedButton.icon(
                   onPressed: () {
                     context.read<PosProvider>().setActiveUnit(usaha.id, usaha.nama);
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => const PosScreen()));
+                    AppNavigator.pushFullscreen(context, const PosScreen());
                   },
                   icon: const Icon(Icons.point_of_sale_rounded, size: 16),
                   label: const Text('Buka Kasir POS', style: TextStyle(fontSize: 12)),
@@ -303,7 +351,7 @@ class UsahaScreen extends StatelessWidget {
                     onPressed: () => _konfirmasiHapusUsaha(context, usaha),
                   ),
                   TextButton(
-                    onPressed: () {},
+                    onPressed: () => _showDetailUsahaDialog(context, usaha),
                     child: const Text('Detail', style: TextStyle(color: AppTheme.primaryBlue, fontSize: 13)),
                   ),
                 ],
@@ -348,7 +396,7 @@ class UsahaScreen extends StatelessWidget {
                 OutlinedButton.icon(
                   onPressed: () {
                     context.read<PosProvider>().setActiveUnit(usaha.id, usaha.nama);
-                    Navigator.push(context, MaterialPageRoute(builder: (_) => const PosScreen()));
+                    AppNavigator.pushFullscreen(context, const PosScreen());
                   },
                   icon: const Icon(Icons.point_of_sale_rounded, size: 16),
                   label: const Text('Kasir POS', style: TextStyle(fontSize: 12)),
@@ -357,6 +405,11 @@ class UsahaScreen extends StatelessWidget {
                 const Text('Tanpa Kasir', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
               Row(
                 children: [
+                  IconButton(
+                    tooltip: 'Lihat Detail Unit',
+                    icon: const Icon(Icons.info_outline_rounded, color: AppTheme.primaryBlue),
+                    onPressed: () => _showDetailUsahaDialog(context, usaha),
+                  ),
                   IconButton(
                     tooltip: usaha.hasPos ? 'Matikan Kasir' : 'Aktifkan Kasir',
                     icon: Icon(
@@ -414,6 +467,177 @@ class UsahaScreen extends StatelessWidget {
       child: Text(
         kategori,
         style: TextStyle(color: text, fontSize: 11, fontWeight: FontWeight.bold),
+      ),
+    );
+  }
+
+  void _showDetailUsahaDialog(BuildContext context, UsahaModel usaha) {
+    final currency = NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          width: 550,
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          usaha.nama,
+                          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '${usaha.jenisUsaha} • ${usaha.lokasi}',
+                          style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _buildTag(usaha.kategoriPortofolio),
+                ],
+              ),
+              const Divider(height: 32),
+              const Text('Kinerja Keuangan Bulan Ini', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppTheme.lightBlueBg,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Pendapatan', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                          const SizedBox(height: 4),
+                          Text(currency.format(usaha.pendapatanBulanIni), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.primaryBlue)),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFEF2F2),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Pengeluaran', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                          const SizedBox(height: 4),
+                          Text(currency.format(usaha.pengeluaranBulanIni), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFFDC2626))),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppTheme.lightGreenBg,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Laba Bersih', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                          const SizedBox(height: 4),
+                          Text(currency.format(usaha.labaBersih), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.accentGreen)),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.cardBorder),
+                ),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Pertumbuhan Penjualan', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                        Text('+${usaha.pertumbuhanPersen}% YoY', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.primaryBlue)),
+                      ],
+                    ),
+                    const Divider(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Sistem Kasir POS', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                        Text(
+                          usaha.hasPos ? 'Aktif (Mesin Kasir Aktif)' : 'Non-Aktif (Gudang/Grosir)',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: usaha.hasPos ? AppTheme.accentGreen : AppTheme.textMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const Divider(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Status Operasional', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                        Row(
+                          children: [
+                            Container(width: 8, height: 8, decoration: const BoxDecoration(color: AppTheme.accentGreen, shape: BoxShape.circle)),
+                            const SizedBox(width: 6),
+                            const Text('Beroperasi Normal', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.accentGreen)),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Tutup')),
+                  if (usaha.hasPos) ...[
+                    const SizedBox(width: 10),
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        context.read<PosProvider>().setActiveUnit(usaha.id, usaha.nama);
+                        AppNavigator.pushFullscreen(context, const PosScreen());
+                      },
+                      icon: const Icon(Icons.point_of_sale_rounded, size: 16),
+                      label: const Text('Buka Kasir POS'),
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

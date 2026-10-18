@@ -3,11 +3,12 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../models/user_model.dart';
 import '../providers/auth_provider.dart';
-import '../providers/dashboard_provider.dart';
+import '../providers/usaha_provider.dart';
 import '../providers/notifikasi_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
 import '../widgets/app_sidebar.dart';
+import '../widgets/app_navigator.dart';
 import 'usaha_screen.dart';
 import 'produk_screen.dart';
 import 'pos_screen.dart';
@@ -48,7 +49,7 @@ class DashboardScreen extends StatelessWidget {
                   children: [
                     IconButton(
                       icon: const Icon(Icons.notifications_none_rounded, color: AppTheme.textPrimary),
-                      onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NotifikasiScreen())),
+                      onPressed: () => AppNavigator.pushFullscreen(context, const NotifikasiScreen()),
                     ),
                     if (notif.unreadCount > 0)
                       Container(
@@ -149,7 +150,7 @@ class DashboardScreen extends StatelessWidget {
               children: [
                 IconButton.filledTonal(
                   icon: const Icon(Icons.notifications_none_rounded, color: AppTheme.primaryBlue),
-                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const NotifikasiScreen())),
+                  onPressed: () => AppNavigator.pushFullscreen(context, const NotifikasiScreen()),
                 ),
                 if (notif.unreadCount > 0)
                   Container(
@@ -208,23 +209,23 @@ class DashboardScreen extends StatelessWidget {
       children: [
         if (role == UserRole.owner || role == UserRole.kasir)
           _buildActionChip(context, Icons.point_of_sale_rounded, 'Buka Mesin Kasir (POS)', () {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const PosScreen()));
+            AppNavigator.pushFullscreen(context, const PosScreen());
           }),
         if (role == UserRole.owner || role == UserRole.adminGudang)
           _buildActionChip(context, Icons.warehouse_rounded, 'Transfer & Opname Gudang', () {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const GudangScreen()));
+            AppNavigator.pushFullscreen(context, const GudangScreen());
           }),
         if (role == UserRole.owner || role == UserRole.manager)
           _buildActionChip(context, Icons.add_shopping_cart_rounded, 'Pengajuan Stok (Manager)', () {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const PermintaanStokScreen()));
+            AppNavigator.pushFullscreen(context, const PermintaanStokScreen());
           }),
         if (role == UserRole.owner)
           _buildActionChip(context, Icons.auto_awesome_rounded, 'AI Intelligence Suite', () {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const AiHubScreen()));
+            AppNavigator.pushFullscreen(context, const AiHubScreen());
           }),
         if (role == UserRole.owner || role == UserRole.auditor)
           _buildActionChip(context, Icons.manage_accounts_rounded, 'Kelola Pengguna & Audit', () {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => const UserManagementScreen()));
+            AppNavigator.pushFullscreen(context, const UserManagementScreen());
           }),
       ],
     );
@@ -242,8 +243,14 @@ class DashboardScreen extends StatelessWidget {
 
   // Finansial Metrics
   Widget _buildOverviewCards(BuildContext context) {
-    final provider = context.watch<DashboardProvider>();
+    final usahaProv = context.watch<UsahaProvider>();
     final currency = NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
+
+    // Hitung secara dinamis dari daftar unit usaha yang nyata
+    final totalPendapatan = usahaProv.daftarUsaha.fold(0.0, (sum, u) => sum + u.pendapatanBulanIni);
+    final totalPengeluaran = usahaProv.daftarUsaha.fold(0.0, (sum, u) => sum + u.pengeluaranBulanIni);
+    final totalLabaBersih = totalPendapatan - totalPengeluaran;
+    final marginPersen = totalPendapatan > 0 ? ((totalLabaBersih / totalPendapatan) * 100.0).toStringAsFixed(1) : '0';
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -256,8 +263,8 @@ class DashboardScreen extends StatelessWidget {
           children: [
             _buildStatCard(
               title: 'Total Omzet Terkonsolidasi',
-              value: currency.format(provider.totalPendapatan),
-              badgeText: '+14.2% bln ini',
+              value: currency.format(totalPendapatan),
+              badgeText: '${usahaProv.daftarUsaha.length} Unit Aktif',
               isBadgePositive: true,
               icon: Icons.trending_up_rounded,
               iconColor: AppTheme.primaryBlue,
@@ -266,8 +273,8 @@ class DashboardScreen extends StatelessWidget {
             ),
             _buildStatCard(
               title: 'Total Arus Kas Keluar',
-              value: currency.format(provider.totalPengeluaran),
-              badgeText: 'Terkendali',
+              value: currency.format(totalPengeluaran),
+              badgeText: 'Operasional',
               isBadgePositive: true,
               icon: Icons.account_balance_wallet_outlined,
               iconColor: AppTheme.textSecondary,
@@ -276,9 +283,9 @@ class DashboardScreen extends StatelessWidget {
             ),
             _buildStatCard(
               title: 'Laba Bersih Operasional',
-              value: currency.format(provider.totalLabaBersih),
-              badgeText: '+26.2% margin',
-              isBadgePositive: true,
+              value: currency.format(totalLabaBersih),
+              badgeText: '$marginPersen% Margin',
+              isBadgePositive: totalLabaBersih >= 0,
               icon: Icons.monetization_on_outlined,
               iconColor: AppTheme.accentGreen,
               iconBg: AppTheme.lightGreenBg,
@@ -333,8 +340,10 @@ class DashboardScreen extends StatelessWidget {
 
   // Business Units List
   Widget _buildBusinessUnitsSection(BuildContext context) {
-    final provider = context.watch<DashboardProvider>();
+    final usahaProv = context.watch<UsahaProvider>();
     final currency = NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
+
+    final list = usahaProv.daftarUsaha;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -350,49 +359,83 @@ class DashboardScreen extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 14),
-        ListView.separated(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: provider.daftarUsaha.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 12),
-          itemBuilder: (context, index) {
-            final usaha = provider.daftarUsaha[index];
-            return Container(
-              padding: const EdgeInsets.all(18),
-              decoration: BoxDecoration(color: AppTheme.surfaceWhite, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppTheme.cardBorder)),
-              child: Row(
+        if (list.isEmpty)
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
+            decoration: BoxDecoration(
+              color: AppTheme.surfaceWhite,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppTheme.cardBorder),
+            ),
+            child: Center(
+              child: Column(
                 children: [
-                  CircleAvatar(radius: 22, backgroundColor: AppTheme.lightBlueBg, child: const Icon(Icons.storefront_rounded, color: AppTheme.primaryBlue, size: 24)),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Text(usaha.nama, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppTheme.textPrimary)),
-                            const SizedBox(width: 8),
-                            _buildTag(usaha.kategoriPortofolio),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Text('${usaha.jenisUsaha} • ${usaha.lokasi}', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-                      ],
-                    ),
-                  ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text(currency.format(usaha.pendapatanBulanIni), style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
-                      const SizedBox(height: 2),
-                      Text('+${usaha.pertumbuhanPersen}%', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppTheme.accentGreen)),
-                    ],
+                  const Icon(Icons.storefront_outlined, size: 48, color: AppTheme.textMuted),
+                  const SizedBox(height: 12),
+                  const Text('Belum ada unit usaha yang didaftarkan.', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.textPrimary)),
+                  const SizedBox(height: 4),
+                  const Text('Daftarkan cabang atau entitas bisnis pertama Anda untuk mulai mengelola keuangan dan POS.', textAlign: TextAlign.center, style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                  const SizedBox(height: 16),
+                  ElevatedButton.icon(
+                    onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const UsahaScreen())),
+                    icon: const Icon(Icons.add_rounded, size: 18),
+                    label: const Text('Tambah Unit Usaha Pertama'),
                   ),
                 ],
               ),
-            );
-          },
-        ),
+            ),
+          )
+        else
+          ListView.separated(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: list.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 12),
+            itemBuilder: (context, index) {
+              final usaha = list[index];
+              return Container(
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(color: AppTheme.surfaceWhite, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppTheme.cardBorder)),
+                child: Row(
+                  children: [
+                    CircleAvatar(radius: 22, backgroundColor: AppTheme.lightBlueBg, child: const Icon(Icons.storefront_rounded, color: AppTheme.primaryBlue, size: 24)),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(usaha.nama, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: AppTheme.textPrimary)),
+                              const SizedBox(width: 8),
+                              _buildTag(usaha.kategoriPortofolio),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text('${usaha.jenisUsaha} • ${usaha.lokasi}', style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                        ],
+                      ),
+                    ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(currency.format(usaha.pendapatanBulanIni), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.primaryBlue)),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Laba: ${currency.format(usaha.labaBersih)}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: usaha.labaBersih >= 0 ? AppTheme.accentGreen : const Color(0xFFDC2626),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
       ],
     );
   }
@@ -538,7 +581,7 @@ class DashboardScreen extends StatelessWidget {
               icon: const Icon(Icons.logout_rounded, size: 18, color: AppTheme.textSecondary),
               onPressed: () {
                 auth.logout();
-                Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
+                AppNavigator.pushReplacementFullscreen(context, const LoginScreen());
               },
             ),
           ),

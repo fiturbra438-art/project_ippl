@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../models/user_model.dart';
 import '../providers/auth_provider.dart';
+import '../providers/usaha_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
 import 'dashboard_screen.dart';
@@ -72,6 +73,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
 
   Widget _buildUserTab(BuildContext context, bool isMobile) {
     final auth = context.watch<AuthProvider>();
+    final usahaList = context.watch<UsahaProvider>().rawDaftarUsaha;
 
     return ListView.separated(
       padding: EdgeInsets.symmetric(horizontal: isMobile ? 16 : 32, vertical: 20),
@@ -79,6 +81,21 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (context, index) {
         final u = auth.penggunaList[index];
+
+        // Format nama unit usaha yang diakses
+        String aksesLabel;
+        if (u.role == UserRole.owner || u.role == UserRole.auditor) {
+          aksesLabel = 'Seluruh Unit Usaha (Akses Penuh Bisnis)';
+        } else if (u.unitAksesIds.isEmpty) {
+          aksesLabel = 'Belum Ditempatkan ke Unit Usaha';
+        } else {
+          final unitNames = u.unitAksesIds.map((id) {
+            final match = usahaList.where((usaha) => usaha.id == id);
+            return match.isNotEmpty ? match.first.nama : 'Unit #$id';
+          }).join(', ');
+          aksesLabel = 'Ditugaskan di: $unitNames';
+        }
+
         return Container(
           padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(
@@ -119,23 +136,51 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
                     const SizedBox(height: 4),
                     Text(u.email, style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
                     const SizedBox(height: 6),
-                    Text(
-                      u.unitAksesIds.isEmpty
-                          ? 'Akses: Seluruh Unit Usaha'
-                          : 'Akses Unit: ${u.unitAksesIds.map((id) => "Unit #$id").join(", ")}',
-                      style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                    Row(
+                      children: [
+                        const Icon(Icons.storefront_rounded, size: 14, color: AppTheme.primaryBlue),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            aksesLabel,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: u.unitAksesIds.isEmpty && u.role != UserRole.owner && u.role != UserRole.auditor
+                                  ? const Color(0xFFDC2626)
+                                  : AppTheme.textPrimary,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
-              Column(
+              Row(
                 children: [
-                  Switch(
-                    value: u.isAktif,
-                    activeColor: AppTheme.accentGreen,
-                    onChanged: u.role == UserRole.owner ? null : (_) => auth.toggleStatusPengguna(u.id),
+                  if (u.role != UserRole.owner) ...[
+                    IconButton(
+                      tooltip: 'Atur Posisi & Penempatan Unit',
+                      icon: const Icon(Icons.edit_location_alt_rounded, color: AppTheme.primaryBlue),
+                      onPressed: () => _showEditUserDialog(context, u),
+                    ),
+                    IconButton(
+                      tooltip: 'Cabut Seluruh Akses',
+                      icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFDC2626)),
+                      onPressed: () => _konfirmasiHapusPengguna(context, u),
+                    ),
+                  ],
+                  Column(
+                    children: [
+                      Switch(
+                        value: u.isAktif,
+                        activeColor: AppTheme.accentGreen,
+                        onChanged: u.role == UserRole.owner ? null : (_) => auth.toggleStatusPengguna(u.id),
+                      ),
+                      Text(u.isAktif ? 'Aktif' : 'Nonaktif', style: TextStyle(fontSize: 11, color: u.isAktif ? AppTheme.accentGreen : AppTheme.textMuted)),
+                    ],
                   ),
-                  Text(u.isAktif ? 'Aktif' : 'Nonaktif', style: TextStyle(fontSize: 11, color: u.isAktif ? AppTheme.accentGreen : AppTheme.textMuted)),
                 ],
               ),
             ],
@@ -250,49 +295,231 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
     }
   }
 
+  void _konfirmasiHapusPengguna(BuildContext context, UserModel u) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Cabut Akses Pengguna?', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: Text('Akun "${u.nama}" (${u.email}) akan dinonaktifkan dan dihapus dari seluruh penempatan unit usaha.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+            onPressed: () {
+              context.read<AuthProvider>().hapusPengguna(u.id);
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Akses untuk ${u.nama} berhasil dicabut.')),
+              );
+            },
+            child: const Text('Hapus Akses'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showEditUserDialog(BuildContext context, UserModel user) {
+    final namaCtrl = TextEditingController(text: user.nama);
+    UserRole selectedRole = user.role;
+    List<int> selectedUnitIds = List.from(user.unitAksesIds);
+    bool isAktif = user.isAktif;
+
+    final daftarUsaha = context.read<UsahaProvider>().rawDaftarUsaha;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (dialogCtx, setState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(color: AppTheme.lightBlueBg, borderRadius: BorderRadius.circular(8)),
+                child: const Icon(Icons.assignment_ind_rounded, color: AppTheme.primaryBlue, size: 20),
+              ),
+              const SizedBox(width: 10),
+              const Text('Atur Posisi & Penempatan Unit', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            ],
+          ),
+          content: SizedBox(
+            width: 480,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Email: ${user.email}', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: namaCtrl,
+                    decoration: const InputDecoration(labelText: 'Nama Karyawan', border: OutlineInputBorder()),
+                  ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<UserRole>(
+                    value: selectedRole,
+                    decoration: const InputDecoration(
+                      labelText: 'Posisi / Peran Jabatan',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.badge_rounded, color: AppTheme.primaryBlue),
+                    ),
+                    items: [UserRole.manager, UserRole.kasir, UserRole.adminGudang, UserRole.auditor]
+                        .map((r) => DropdownMenuItem(value: r, child: Text(r.label)))
+                        .toList(),
+                    onChanged: (val) {
+                      if (val != null) {
+                        setState(() {
+                          selectedRole = val;
+                          if (selectedRole == UserRole.auditor) {
+                            selectedUnitIds.clear(); // Auditor bisa akses semua
+                          }
+                        });
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 18),
+                  const Text('Pilih Unit Usaha yang Boleh Diakses:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.textPrimary)),
+                  const SizedBox(height: 4),
+                  const Text('Karyawan hanya bisa membuka modul, POS, dan data di cabang yang dipilih.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                  const SizedBox(height: 10),
+
+                  if (selectedRole == UserRole.auditor)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(color: AppTheme.lightGreenBg, borderRadius: BorderRadius.circular(8)),
+                      child: const Text('Peran Auditor memiliki izin membaca seluruh laporan unit usaha.', style: TextStyle(fontSize: 12, color: AppTheme.accentGreen)),
+                    )
+                  else
+                    Container(
+                      decoration: BoxDecoration(
+                        border: Border.all(color: AppTheme.cardBorder),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Column(
+                        children: daftarUsaha.map((usaha) {
+                          final isChecked = selectedUnitIds.contains(usaha.id);
+                          return CheckboxListTile(
+                            dense: true,
+                            title: Text(usaha.nama, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                            subtitle: Text('${usaha.jenisUsaha} • ${usaha.lokasi}', style: const TextStyle(fontSize: 11)),
+                            secondary: Icon(
+                              usaha.hasPos ? Icons.point_of_sale_rounded : Icons.warehouse_rounded,
+                              size: 20,
+                              color: isChecked ? AppTheme.primaryBlue : AppTheme.textMuted,
+                            ),
+                            value: isChecked,
+                            activeColor: AppTheme.primaryBlue,
+                            onChanged: (val) {
+                              setState(() {
+                                if (val == true) {
+                                  selectedUnitIds.add(usaha.id);
+                                } else {
+                                  selectedUnitIds.remove(usaha.id);
+                                }
+                              });
+                            },
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
+            ElevatedButton(
+              onPressed: () {
+                if (namaCtrl.text.trim().isEmpty) return;
+                context.read<AuthProvider>().updatePenggunaAkses(
+                  id: user.id,
+                  nama: namaCtrl.text.trim(),
+                  role: selectedRole,
+                  unitAksesIds: selectedUnitIds,
+                  isAktif: isAktif,
+                );
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Akses dan penempatan untuk ${user.nama} berhasil diperbarui.')),
+                );
+              },
+              child: const Text('Simpan Perubahan'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _showTambahUserDialog(BuildContext context) {
     final namaCtrl = TextEditingController();
     final emailCtrl = TextEditingController();
     UserRole selectedRole = UserRole.kasir;
-    int selectedUnitId = 1;
+    List<int> selectedUnitIds = [1];
+
+    final daftarUsaha = context.read<UsahaProvider>().rawDaftarUsaha;
 
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Tambah Pengguna Baru', style: TextStyle(fontWeight: FontWeight.bold)),
+          title: const Text('Tambah Karyawan & Tentukan Posisi', style: TextStyle(fontWeight: FontWeight.bold)),
           content: SizedBox(
-            width: 420,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(controller: namaCtrl, decoration: const InputDecoration(labelText: 'Nama Lengkap', border: OutlineInputBorder())),
-                const SizedBox(height: 12),
-                TextField(controller: emailCtrl, decoration: const InputDecoration(labelText: 'Email', border: OutlineInputBorder())),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<UserRole>(
-                  value: selectedRole,
-                  decoration: const InputDecoration(labelText: 'Hak Akses / Peran', border: OutlineInputBorder()),
-                  items: UserRole.values.map((r) => DropdownMenuItem(value: r, child: Text(r.label))).toList(),
-                  onChanged: (val) {
-                    if (val != null) setState(() => selectedRole = val);
-                  },
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<int>(
-                  value: selectedUnitId,
-                  decoration: const InputDecoration(labelText: 'Tugaskan ke Unit Usaha', border: OutlineInputBorder()),
-                  items: const [
-                    DropdownMenuItem(value: 1, child: Text('Kedai Kopi Bahagia')),
-                    DropdownMenuItem(value: 2, child: Text('Laundry Bersih Kilat')),
-                    DropdownMenuItem(value: 3, child: Text('Toko Elektronik Digital')),
-                  ],
-                  onChanged: (val) {
-                    if (val != null) setState(() => selectedUnitId = val);
-                  },
-                ),
-              ],
+            width: 460,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(controller: namaCtrl, decoration: const InputDecoration(labelText: 'Nama Lengkap *', border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  TextField(controller: emailCtrl, decoration: const InputDecoration(labelText: 'Email Login *', border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<UserRole>(
+                    value: selectedRole,
+                    decoration: const InputDecoration(labelText: 'Posisi / Jabatan *', border: OutlineInputBorder()),
+                    items: [UserRole.manager, UserRole.kasir, UserRole.adminGudang, UserRole.auditor]
+                        .map((r) => DropdownMenuItem(value: r, child: Text(r.label)))
+                        .toList(),
+                    onChanged: (val) {
+                      if (val != null) setState(() => selectedRole = val);
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  const Text('Tugaskan ke Unit Usaha (Akses Terbatas):', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  const SizedBox(height: 8),
+                  Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: AppTheme.cardBorder),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Column(
+                      children: daftarUsaha.map((usaha) {
+                        final isChecked = selectedUnitIds.contains(usaha.id);
+                        return CheckboxListTile(
+                          dense: true,
+                          title: Text(usaha.nama, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                          subtitle: Text(usaha.jenisUsaha, style: const TextStyle(fontSize: 11)),
+                          value: isChecked,
+                          activeColor: AppTheme.primaryBlue,
+                          onChanged: (val) {
+                            setState(() {
+                              if (val == true) {
+                                selectedUnitIds.add(usaha.id);
+                              } else {
+                                selectedUnitIds.remove(usaha.id);
+                              }
+                            });
+                          },
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           actions: [
@@ -306,7 +533,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
                       nama: namaCtrl.text,
                       email: emailCtrl.text,
                       role: selectedRole,
-                      unitAksesIds: [selectedUnitId],
+                      unitAksesIds: selectedUnitIds,
                     ),
                   );
                   Navigator.pop(ctx);
