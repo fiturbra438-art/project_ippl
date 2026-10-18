@@ -456,8 +456,10 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
   void _showTambahUserDialog(BuildContext context) {
     final namaCtrl = TextEditingController();
     final emailCtrl = TextEditingController();
+    final passwordCtrl = TextEditingController();
     UserRole selectedRole = UserRole.kasir;
     List<int> selectedUnitIds = [1];
+    bool obscurePassword = true;
 
     final daftarUsaha = context.read<UsahaProvider>().rawDaftarUsaha;
 
@@ -477,6 +479,19 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
                   TextField(controller: namaCtrl, decoration: const InputDecoration(labelText: 'Nama Lengkap *', border: OutlineInputBorder())),
                   const SizedBox(height: 12),
                   TextField(controller: emailCtrl, decoration: const InputDecoration(labelText: 'Email Login *', border: OutlineInputBorder())),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: passwordCtrl,
+                    obscureText: obscurePassword,
+                    decoration: InputDecoration(
+                      labelText: 'Kata Sandi / Password *',
+                      border: const OutlineInputBorder(),
+                      suffixIcon: IconButton(
+                        icon: Icon(obscurePassword ? Icons.visibility_off_rounded : Icons.visibility_rounded),
+                        onPressed: () => setState(() => obscurePassword = !obscurePassword),
+                      ),
+                    ),
+                  ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<UserRole>(
                     value: selectedRole,
@@ -525,18 +540,29 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
             ElevatedButton(
-              onPressed: () {
-                if (namaCtrl.text.isNotEmpty && emailCtrl.text.isNotEmpty) {
-                  Provider.of<AuthProvider>(context, listen: false).tambahPengguna(
-                    UserModel(
-                      id: DateTime.now().millisecondsSinceEpoch,
-                      nama: namaCtrl.text,
-                      email: emailCtrl.text,
-                      role: selectedRole,
-                      unitAksesIds: selectedUnitIds,
-                    ),
+              onPressed: () async {
+                if (namaCtrl.text.isNotEmpty && emailCtrl.text.isNotEmpty && passwordCtrl.text.isNotEmpty) {
+                  final auth = Provider.of<AuthProvider>(context, listen: false);
+                  final messenger = ScaffoldMessenger.of(context);
+                  final navigator = Navigator.of(ctx);
+
+                  final ok = await auth.tambahKaryawanKeBackend(
+                    nama: namaCtrl.text.trim(),
+                    email: emailCtrl.text.trim(),
+                    password: passwordCtrl.text,
+                    role: selectedRole,
+                    unitAksesIds: selectedUnitIds,
                   );
-                  Navigator.pop(ctx);
+                  navigator.pop();
+                  if (ok) {
+                    messenger.showSnackBar(
+                      SnackBar(content: Text('Akun karyawan ${emailCtrl.text} berhasil didaftarkan ke PostgreSQL!')),
+                    );
+                  } else {
+                    messenger.showSnackBar(
+                      const SnackBar(content: Text('Gagal mendaftarkan karyawan. Periksa koneksi atau duplikasi email.')),
+                    );
+                  }
                 }
               },
               child: const Text('Simpan'),

@@ -99,6 +99,8 @@ class DashboardScreen extends StatelessWidget {
     final auth = context.watch<AuthProvider>();
     final notif = context.watch<NotifikasiProvider>();
 
+    final isOwner = auth.isOwner;
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -117,7 +119,9 @@ class DashboardScreen extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              'Pantau performa finansial, stok, POS, dan intelijen AI seluruh unit usaha.',
+              isOwner
+                  ? 'Pantau performa finansial, stok, POS, dan intelijen AI seluruh unit usaha.'
+                  : 'Akses operasional terbatas sesuai penempatan unit kerja oleh Owner.',
               style: const TextStyle(fontSize: 14, color: AppTheme.textSecondary),
             ),
           ],
@@ -131,19 +135,22 @@ class DashboardScreen extends StatelessWidget {
               child: DropdownButtonHideUnderline(
                 child: DropdownButton<int?>(
                   value: auth.selectedUnitId,
-                  items: const [
-                    DropdownMenuItem(value: null, child: Text('🏢 Konsolidasi Semua Unit')),
-                    DropdownMenuItem(value: 1, child: Text('☕ Kedai Kopi Bahagia')),
-                    DropdownMenuItem(value: 2, child: Text('🧺 Laundry Bersih Kilat')),
-                    DropdownMenuItem(value: 3, child: Text('📱 Toko Elektronik Digital')),
+                  items: [
+                    if (isOwner)
+                      const DropdownMenuItem(value: null, child: Text('🏢 Konsolidasi Semua Unit')),
+                    ...context.watch<UsahaProvider>().getDaftarUsahaForUser(auth.currentUser?.unitAksesIds ?? [], isOwner).map((u) {
+                      return DropdownMenuItem<int?>(value: u.id, child: Text('📍 ${u.nama}'));
+                    }),
                   ],
                   onChanged: (val) => auth.setSelectedUnit(val),
                 ),
               ),
             ),
-            const SizedBox(width: 12),
-            // Switch Role (Simulator Hak Akses)
-            _buildRoleSwitcher(context),
+            if (isOwner) ...[
+              const SizedBox(width: 12),
+              // Switch Role (Hanya muncul untuk simulasi Owner)
+              _buildRoleSwitcher(context),
+            ],
             const SizedBox(width: 12),
             Stack(
               alignment: Alignment.topRight,
@@ -243,12 +250,15 @@ class DashboardScreen extends StatelessWidget {
 
   // Finansial Metrics
   Widget _buildOverviewCards(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
     final usahaProv = context.watch<UsahaProvider>();
     final currency = NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
 
-    // Hitung secara dinamis dari daftar unit usaha yang nyata
-    final totalPendapatan = usahaProv.daftarUsaha.fold(0.0, (sum, u) => sum + u.pendapatanBulanIni);
-    final totalPengeluaran = usahaProv.daftarUsaha.fold(0.0, (sum, u) => sum + u.pengeluaranBulanIni);
+    // Karyawan hanya melihat kalkulasi unit yang diizinkan untuknya
+    final unitList = usahaProv.getDaftarUsahaForUser(auth.currentUser?.unitAksesIds ?? [], auth.isOwner);
+
+    final totalPendapatan = unitList.fold(0.0, (sum, u) => sum + u.pendapatanBulanIni);
+    final totalPengeluaran = unitList.fold(0.0, (sum, u) => sum + u.pengeluaranBulanIni);
     final totalLabaBersih = totalPendapatan - totalPengeluaran;
     final marginPersen = totalPendapatan > 0 ? ((totalLabaBersih / totalPendapatan) * 100.0).toStringAsFixed(1) : '0';
 
@@ -262,9 +272,9 @@ class DashboardScreen extends StatelessWidget {
           runSpacing: 16,
           children: [
             _buildStatCard(
-              title: 'Total Omzet Terkonsolidasi',
+              title: auth.isOwner ? 'Total Omzet Terkonsolidasi' : 'Pendapatan Unit Ditugaskan',
               value: currency.format(totalPendapatan),
-              badgeText: '${usahaProv.daftarUsaha.length} Unit Aktif',
+              badgeText: '${unitList.length} Unit Aktif',
               isBadgePositive: true,
               icon: Icons.trending_up_rounded,
               iconColor: AppTheme.primaryBlue,
@@ -340,10 +350,12 @@ class DashboardScreen extends StatelessWidget {
 
   // Business Units List
   Widget _buildBusinessUnitsSection(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
     final usahaProv = context.watch<UsahaProvider>();
     final currency = NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
 
-    final list = usahaProv.daftarUsaha;
+    // Karyawan hanya melihat daftar unit usaha yang diizinkan untuknya
+    final list = usahaProv.getDaftarUsahaForUser(auth.currentUser?.unitAksesIds ?? [], auth.isOwner);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -459,8 +471,11 @@ class DashboardScreen extends StatelessWidget {
     );
   }
 
-  // AI Alokasi Kas Card
+  // AI Alokasi Kas Card (Hanya ditampilkan untuk Owner)
   Widget _buildAllocationRecommendationCard(BuildContext context) {
+    final isOwner = context.watch<AuthProvider>().isOwner;
+    if (!isOwner) return const SizedBox.shrink();
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(

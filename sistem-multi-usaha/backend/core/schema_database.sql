@@ -51,7 +51,7 @@ WHERE i.qty <= i.min_stock;
 -- 2. FUNCTION (Fungsi Perhitungan, Validasi & Logic)
 -- ----------------------------------------------------------------------------
 
--- Fungsi A: Validasi Ketersediaan Stok Sebelum Transaksi
+-- Fungsi A: Validasi Ketersediaan Stok Sebelum Transaksi (Dengan Row-Level Pessimistic Lock FOR UPDATE)
 CREATE OR REPLACE FUNCTION fn_cek_ketersediaan_stok(
     p_unit_id INT,
     p_product_id INT,
@@ -60,9 +60,11 @@ CREATE OR REPLACE FUNCTION fn_cek_ketersediaan_stok(
 DECLARE
     v_stok_tersedia INT;
 BEGIN
+    -- Menggunakan FOR UPDATE untuk mencegah Race Condition / Concurrency Conflict
     SELECT qty INTO v_stok_tersedia 
     FROM inventories 
-    WHERE unit_id = p_unit_id AND product_id = p_product_id;
+    WHERE unit_id = p_unit_id AND product_id = p_product_id
+    FOR UPDATE;
 
     IF v_stok_tersedia IS NULL OR v_stok_tersedia < p_qty THEN
         RETURN FALSE;

@@ -149,6 +149,9 @@ impl AppState {
             });
         }
 
+        let jwt_secret = std::env::var("JWT_SECRET")
+            .unwrap_or_else(|_| "secret-multi-usaha-key-2026".to_string());
+
         Self {
             db: pool,
             owners: Arc::new(RwLock::new(owners)),
@@ -161,7 +164,7 @@ impl AppState {
             stok_opnames: Arc::new(RwLock::new(Vec::new())),
             transfer_stoks: Arc::new(RwLock::new(Vec::new())),
             audit_logs: Arc::new(RwLock::new(Vec::new())),
-            jwt_secret: "secret-multi-usaha-key-2026".to_string(),
+            jwt_secret,
         }
     }
 }
