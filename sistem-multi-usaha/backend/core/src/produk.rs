@@ -88,15 +88,19 @@ pub async fn list_low_stock(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let _claims = match require_claims(&headers, &state.jwt_secret) {
+    let claims = match require_claims(&headers, &state.jwt_secret) {
         Ok(c) => c,
         Err(err) => return err.into_response(),
     };
+    let owner_id = claims.owner_id;
 
     let rows = sqlx::query_as::<_, (i32, i32, String, String, rust_decimal::Decimal, rust_decimal::Decimal, i32, i32)>(
-        "SELECT product_id, unit_id, nama_produk, sku, harga_beli, harga_jual, stok_saat_ini, batas_minimum
-         FROM view_produk_stok_kritis"
+        "SELECT v.product_id, v.unit_id, v.nama_produk, v.sku, v.harga_beli, v.harga_jual, v.stok_saat_ini, v.batas_minimum
+         FROM view_produk_stok_kritis v
+         JOIN business_units b ON v.unit_id = b.id
+         WHERE b.owner_id = $1"
     )
+    .bind(owner_id as i32)
     .fetch_all(&state.db)
     .await;
 
@@ -105,7 +109,7 @@ pub async fn list_low_stock(
             .into_iter()
             .map(|r| ProdukModel {
                 id: r.0 as i64,
-                owner_id: 1,
+                owner_id,
                 unit_id: r.1 as i64,
                 nama: r.2,
                 sku: r.3,

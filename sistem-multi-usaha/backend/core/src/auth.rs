@@ -1,6 +1,6 @@
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
@@ -409,10 +409,16 @@ pub async fn upgrade_owner_tier(
 // 5. LOGIN KARYAWAN (Validasi dari tabel PostgreSQL `users` & `user_units`)
 pub async fn login_karyawan(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Json(payload): Json<LoginKaryawanRequest>,
 ) -> impl IntoResponse {
-    let user_row = sqlx::query_as::<_, (i32, String, String, String, String, bool)>(
-        "SELECT id, nama, email, password_hash, role, aktif
+    let client_platform = headers
+        .get("x-client-platform")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("app");
+
+    let user_row = sqlx::query_as::<_, (i32, Option<i32>, String, String, String, String, bool)>(
+        "SELECT id, owner_id, nama, email, password_hash, role, aktif
          FROM users
          WHERE LOWER(email) = LOWER($1) AND role != 'owner'"
     )
@@ -434,7 +440,19 @@ pub async fn login_karyawan(
         }
     };
 
-    if !karyawan.5 {
+    // Platform guard: Pada platform Web, hanya Owner & Manager yang diizinkan masuk
+    if client_platform == "web" && karyawan.5 != "manager" {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<KaryawanAuthResponse> {
+                status: "error".to_string(),
+                message: "Portal Web dikhususkan untuk Owner dan Manajer. Staf Kasir atau Gudang silakan login melalui Aplikasi Desktop atau Mobile POS.".to_string(),
+                data: None,
+            }),
+        );
+    }
+
+    if !karyawan.6 {
         return (
             StatusCode::FORBIDDEN,
             Json(ApiResponse::<KaryawanAuthResponse> {
@@ -445,7 +463,7 @@ pub async fn login_karyawan(
         );
     }
 
-    if !verify(&payload.password, &karyawan.3).unwrap_or(false) {
+    if !verify(&payload.password, &karyawan.4).unwrap_or(false) {
         return (
             StatusCode::UNAUTHORIZED,
             Json(ApiResponse::<KaryawanAuthResponse> {
@@ -477,18 +495,32 @@ pub async fn login_karyawan(
         }
     }
 
-    let role_enum = match karyawan.4.as_str() {
+    let role_enum = match karyawan.5.as_str() {
         "manager" => crate::models::PeranPengguna::Manager,
         "kasir" => crate::models::PeranPengguna::Kasir,
         "admin_gudang" => crate::models::PeranPengguna::AdminGudang,
         _ => crate::models::PeranPengguna::Auditor,
     };
 
+    let target_owner_id = match karyawan.1 {
+        Some(oid) => oid as i64,
+        None => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(ApiResponse::<KaryawanAuthResponse> {
+                    status: "error".to_string(),
+                    message: "Akun karyawan ini tidak terasosiasi dengan pemilik bisnis (owner).".to_string(),
+                    data: None,
+                }),
+            );
+        }
+    };
+
     let token = generate_token(
-        &karyawan.2,
+        &karyawan.3,
         karyawan.0 as i64,
-        &karyawan.4,
-        1,
+        &karyawan.5,
+        target_owner_id,
         None,
         &state.jwt_secret,
     ).unwrap_or_default();
@@ -497,14 +529,14 @@ pub async fn login_karyawan(
         StatusCode::OK,
         Json(ApiResponse {
             status: "success".to_string(),
-            message: format!("Login berhasil sebagai {}", karyawan.4),
+            message: format!("Login berhasil sebagai {}", karyawan.5),
             data: Some(KaryawanAuthResponse {
                 token,
                 karyawan_id: karyawan.0 as i64,
-                nama: karyawan.1,
-                email: karyawan.2,
+                nama: karyawan.2,
+                email: karyawan.3,
                 peran: role_enum,
-                owner_id: 1,
+                owner_id: target_owner_id,
                 unit_akses_ids,
             }),
         }),

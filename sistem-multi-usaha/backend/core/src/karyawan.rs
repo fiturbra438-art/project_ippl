@@ -17,17 +17,19 @@ pub async fn list_karyawan(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let _claims = match require_claims(&headers, &state.jwt_secret) {
+    let claims = match require_claims(&headers, &state.jwt_secret) {
         Ok(c) => c,
         Err(err) => return err.into_response(),
     };
+    let owner_id = claims.owner_id;
 
-    let rows = sqlx::query_as::<_, (i32, String, String, String, String, bool)>(
-        "SELECT id, nama, email, password_hash, role, aktif
+    let rows = sqlx::query_as::<_, (i32, Option<i32>, String, String, String, String, bool)>(
+        "SELECT id, owner_id, nama, email, password_hash, role, aktif
          FROM users
-         WHERE role != 'owner'
+         WHERE role != 'owner' AND owner_id = $1
          ORDER BY id ASC"
     )
+    .bind(owner_id as i32)
     .fetch_all(&state.db)
     .await;
 
@@ -42,18 +44,18 @@ pub async fn list_karyawan(
 
             hasil.push(KaryawanAccount {
                 id: u.0 as i64,
-                owner_id: 1,
-                nama: u.1,
-                email: u.2,
-                password_hash: u.3,
-                peran: match u.4.as_str() {
+                owner_id: u.1.map(|oid| oid as i64).unwrap_or(owner_id),
+                nama: u.2,
+                email: u.3,
+                password_hash: u.4,
+                peran: match u.5.as_str() {
                     "manager" => PeranPengguna::Manager,
                     "kasir" => PeranPengguna::Kasir,
                     "admin_gudang" => PeranPengguna::AdminGudang,
                     _ => PeranPengguna::Auditor,
                 },
                 unit_akses_ids: unit_ids,
-                is_active: u.5,
+                is_active: u.6,
             });
         }
     }
@@ -91,10 +93,11 @@ pub async fn create_karyawan(
     };
 
     let user_row: Result<(i32,), sqlx::Error> = sqlx::query_as(
-        "INSERT INTO users (nama, email, password_hash, role, aktif, created_at)
-         VALUES ($1, $2, $3, $4, true, now())
+        "INSERT INTO users (owner_id, nama, email, password_hash, role, aktif, created_at)
+         VALUES ($1, $2, $3, $4, $5, true, now())
          RETURNING id"
     )
+    .bind(owner_id as i32)
     .bind(&payload.nama)
     .bind(&payload.email)
     .bind(&password_hash)
@@ -165,13 +168,38 @@ pub async fn update_karyawan(
     Path(id): Path<i64>,
     Json(payload): Json<UpdateKaryawanRequest>,
 ) -> impl IntoResponse {
-    let _claims = match require_claims(&headers, &state.jwt_secret) {
+    let claims = match require_claims(&headers, &state.jwt_secret) {
         Ok(c) => c,
         Err(err) => return err.into_response(),
     };
+    let owner_id = claims.owner_id;
+
+    // Pastikan user adalah karyawan milik owner_id ini
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND owner_id = $2)")
+        .bind(id as i32)
+        .bind(owner_id as i32)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(false);
+
+    if !exists {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<()> {
+                status: "error".to_string(),
+                message: "Karyawan tidak ditemukan atau Anda tidak memiliki hak akses.".to_string(),
+                data: None,
+            }),
+        ).into_response();
+    }
 
     if let Some(nama) = &payload.nama {
-        let _ = sqlx::query("UPDATE users SET nama = $1 WHERE id = $2").bind(nama).bind(id as i32).execute(&state.db).await;
+        let _ = sqlx::query("UPDATE users SET nama = $1 WHERE id = $2 AND owner_id = $3")
+            .bind(nama)
+            .bind(id as i32)
+            .bind(owner_id as i32)
+            .execute(&state.db)
+            .await;
     }
     if let Some(peran) = &payload.peran {
         let role_str = match peran {
@@ -180,15 +208,34 @@ pub async fn update_karyawan(
             PeranPengguna::AdminGudang => "admin_gudang",
             _ => "auditor",
         };
-        let _ = sqlx::query("UPDATE users SET role = $1 WHERE id = $2").bind(role_str).bind(id as i32).execute(&state.db).await;
+        let _ = sqlx::query("UPDATE users SET role = $1 WHERE id = $2 AND owner_id = $3")
+            .bind(role_str)
+            .bind(id as i32)
+            .bind(owner_id as i32)
+            .execute(&state.db)
+            .await;
     }
     if let Some(active) = payload.is_active {
-        let _ = sqlx::query("UPDATE users SET aktif = $1 WHERE id = $2").bind(active).bind(id as i32).execute(&state.db).await;
+        let _ = sqlx::query("UPDATE users SET aktif = $1 WHERE id = $2 AND owner_id = $3")
+            .bind(active)
+            .bind(id as i32)
+            .bind(owner_id as i32)
+            .execute(&state.db)
+            .await;
     }
     if let Some(unit_ids) = &payload.unit_akses_ids {
         let _ = sqlx::query("DELETE FROM user_units WHERE user_id = $1").bind(id as i32).execute(&state.db).await;
         for uid in unit_ids {
-            let _ = sqlx::query("INSERT INTO user_units (user_id, unit_id) VALUES ($1, $2)").bind(id as i32).bind(*uid as i32).execute(&state.db).await;
+            // Pastikan unit memang milik owner ini
+            let unit_valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM business_units WHERE id = $1 AND owner_id = $2)")
+                .bind(*uid as i32)
+                .bind(owner_id as i32)
+                .fetch_one(&state.db)
+                .await
+                .unwrap_or(false);
+            if unit_valid {
+                let _ = sqlx::query("INSERT INTO user_units (user_id, unit_id) VALUES ($1, $2)").bind(id as i32).bind(*uid as i32).execute(&state.db).await;
+            }
         }
     }
 
@@ -208,13 +255,18 @@ pub async fn delete_karyawan(
     headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    let _claims = match require_claims(&headers, &state.jwt_secret) {
+    let claims = match require_claims(&headers, &state.jwt_secret) {
         Ok(c) => c,
         Err(err) => return err.into_response(),
     };
+    let owner_id = claims.owner_id;
 
     let _ = sqlx::query("DELETE FROM user_units WHERE user_id = $1").bind(id as i32).execute(&state.db).await;
-    let res = sqlx::query("DELETE FROM users WHERE id = $1 AND role != 'owner'").bind(id as i32).execute(&state.db).await;
+    let res = sqlx::query("DELETE FROM users WHERE id = $1 AND role != 'owner' AND owner_id = $2")
+        .bind(id as i32)
+        .bind(owner_id as i32)
+        .execute(&state.db)
+        .await;
 
     match res {
         Ok(_) => (

@@ -27,7 +27,12 @@ impl AppState {
     pub async fn new(pool: PgPool) -> Self {
         let password_demo = hash("123456", 4).unwrap_or_default();
 
-        // 1. Sinkronisasi atau Buat Akun Owner Awal di PostgreSQL
+        // 1. Tambahkan kolom owner_id pada tabel users jika belum ada (multi-tenant support)
+        let _ = sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_id INT REFERENCES users(id) ON DELETE CASCADE")
+            .execute(&pool)
+            .await;
+
+        // 1b. Sinkronisasi atau Buat Akun Owner Awal di PostgreSQL
         let owner_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE role = 'owner'")
             .fetch_one(&pool)
             .await
@@ -57,6 +62,7 @@ impl AppState {
         #[derive(sqlx::FromRow)]
         struct UserRow {
             id: i32,
+            owner_id: Option<i32>,
             nama: String,
             email: String,
             password_hash: String,
@@ -70,7 +76,7 @@ impl AppState {
             secret_2fa: Option<String>,
         }
 
-        let user_rows: Vec<UserRow> = sqlx::query_as("SELECT id, nama, email, password_hash, role, aktif, nama_perusahaan, tier, kuota_unit_usaha, sisa_kuota_ai, is_2fa_active, secret_2fa FROM users")
+        let user_rows: Vec<UserRow> = sqlx::query_as("SELECT id, owner_id, nama, email, password_hash, role, aktif, nama_perusahaan, tier, kuota_unit_usaha, sisa_kuota_ai, is_2fa_active, secret_2fa FROM users")
             .fetch_all(&pool)
             .await
             .unwrap_or_default();
@@ -111,9 +117,11 @@ impl AppState {
                     .await
                     .unwrap_or_default();
 
+                let k_owner_id = u.owner_id.map(|oid| oid as i64).unwrap_or(1);
+
                 karyawans.push(KaryawanAccount {
                     id: u.id as i64,
-                    owner_id: 1,
+                    owner_id: k_owner_id,
                     nama: u.nama,
                     email: u.email,
                     password_hash: u.password_hash,

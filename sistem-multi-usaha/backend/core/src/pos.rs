@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use chrono::Local;
 
-use crate::auth::extract_claims;
+use crate::auth::require_claims;
 use crate::models::{
     AuditLogModel, JenisTransaksi, ShiftKasirModel, StatusShift, TransaksiModel,
 };
@@ -55,9 +55,12 @@ pub async fn buka_shift(
     headers: HeaderMap,
     Json(payload): Json<BukaShiftRequest>,
 ) -> impl IntoResponse {
-    let claims = extract_claims(&headers, &state.jwt_secret);
-    let kasir_id = claims.as_ref().map(|c| c.user_id).unwrap_or(1);
-    let kasir_nama = claims.as_ref().map(|c| c.sub.clone()).unwrap_or_else(|| "Andi Kasir".to_string());
+    let claims = match require_claims(&headers, &state.jwt_secret) {
+        Ok(c) => c,
+        Err(err) => return err.into_response(),
+    };
+    let kasir_id = claims.user_id;
+    let kasir_nama = claims.sub.clone();
 
     let result: Result<(Option<i32>, Option<String>, Option<String>), sqlx::Error> = sqlx::query_as(
         "CALL sp_buka_shift_kasir($1, $2, $3, $4, NULL, NULL, NULL)"
@@ -82,7 +85,7 @@ pub async fn buka_shift(
                         message: pesan_str,
                         data: None,
                     }),
-                );
+                ).into_response();
             }
 
             let shift_id = shift_id_opt.unwrap_or(0) as i64;
@@ -109,7 +112,7 @@ pub async fn buka_shift(
                     message: pesan_str,
                     data: Some(new_shift),
                 }),
-            )
+            ).into_response()
         }
         Err(e) => {
             (
@@ -119,7 +122,7 @@ pub async fn buka_shift(
                     message: format!("Error database: {}", e),
                     data: None,
                 }),
-            )
+            ).into_response()
         }
     }
 }
@@ -199,10 +202,32 @@ pub async fn checkout_pos(
     headers: HeaderMap,
     Json(payload): Json<CheckoutRequest>,
 ) -> impl IntoResponse {
-    let claims = extract_claims(&headers, &state.jwt_secret);
-    let owner_id = claims.as_ref().map(|c| c.owner_id).unwrap_or(1);
-    let user_id = claims.as_ref().map(|c| c.user_id).unwrap_or(1);
-    let kasir_nama = claims.as_ref().map(|c| c.sub.clone()).unwrap_or_else(|| "Kasir POS".to_string());
+    let claims = match require_claims(&headers, &state.jwt_secret) {
+        Ok(c) => c,
+        Err(err) => return err.into_response(),
+    };
+    let owner_id = claims.owner_id;
+    let user_id = claims.user_id;
+    let _kasir_nama = claims.sub.clone();
+
+    // Verifikasi bahwa unit_id milik owner_id terkait
+    let unit_valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM business_units WHERE id = $1 AND owner_id = $2)")
+        .bind(payload.unit_id as i32)
+        .bind(owner_id as i32)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(false);
+
+    if !unit_valid {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<TransaksiModel> {
+                status: "error".to_string(),
+                message: "Unit usaha tidak valid atau bukan milik bisnis Anda.".to_string(),
+                data: None,
+            }),
+        ).into_response();
+    }
 
     if payload.items.is_empty() {
         return (
@@ -212,7 +237,7 @@ pub async fn checkout_pos(
                 message: "Keranjang belanja tidak boleh kosong.".to_string(),
                 data: None,
             }),
-        );
+        ).into_response();
     }
 
     // Siapkan items dalam format JSONB untuk dikirim ke Stored Procedure
@@ -255,7 +280,7 @@ pub async fn checkout_pos(
                         message: pesan_str,
                         data: None,
                     }),
-                );
+                ).into_response();
             }
 
             let trx_id = trx_id_opt.unwrap_or(0) as i64;
@@ -289,7 +314,7 @@ pub async fn checkout_pos(
                     message: "Transaksi berhasil diproses via Stored Procedure & Trigger PostgreSQL.".to_string(),
                     data: Some(new_trx),
                 }),
-            )
+            ).into_response()
         }
         Err(e) => {
             (
@@ -299,7 +324,7 @@ pub async fn checkout_pos(
                     message: format!("Gagal memanggil stored procedure database: {}", e),
                     data: None,
                 }),
-            )
+            ).into_response()
         }
     }
 }
@@ -310,8 +335,11 @@ pub async fn list_transaksi(
     headers: HeaderMap,
     Query(query): Query<TransaksiQuery>,
 ) -> impl IntoResponse {
-    let claims = extract_claims(&headers, &state.jwt_secret);
-    let owner_id = claims.as_ref().map(|c| c.owner_id).unwrap_or(1);
+    let claims = match require_claims(&headers, &state.jwt_secret) {
+        Ok(c) => c,
+        Err(err) => return err.into_response(),
+    };
+    let owner_id = claims.owner_id;
 
     let transaksis = state.transaksis.read().await;
 
@@ -347,7 +375,7 @@ pub async fn list_transaksi(
             message: format!("Berhasil mengambil {} transaksi.", hasil.len()),
             data: Some(hasil),
         }),
-    )
+    ).into_response()
 }
 
 // 6. CATAT TRANSAKSI MANUAL (Pemasukan / Pengeluaran Umum)
@@ -356,10 +384,13 @@ pub async fn create_transaksi_manual(
     headers: HeaderMap,
     Json(payload): Json<CreateTransaksiManualRequest>,
 ) -> impl IntoResponse {
-    let claims = extract_claims(&headers, &state.jwt_secret);
-    let owner_id = claims.as_ref().map(|c| c.owner_id).unwrap_or(1);
-    let aktor_nama = claims.as_ref().map(|c| c.sub.clone()).unwrap_or_else(|| "User Demo".to_string());
-    let aktor_role = claims.as_ref().map(|c| c.role.clone()).unwrap_or_else(|| "manager".to_string());
+    let claims = match require_claims(&headers, &state.jwt_secret) {
+        Ok(c) => c,
+        Err(err) => return err.into_response(),
+    };
+    let owner_id = claims.owner_id;
+    let aktor_nama = claims.sub.clone();
+    let aktor_role = claims.role.clone();
 
     let mut usahas = state.usahas.write().await;
     let nama_unit = match usahas.iter_mut().find(|u| u.id == payload.unit_id) {
@@ -379,7 +410,7 @@ pub async fn create_transaksi_manual(
                     message: "Unit usaha tidak ditemukan.".to_string(),
                     data: None,
                 }),
-            );
+            ).into_response();
         }
     };
     drop(usahas);
@@ -427,5 +458,5 @@ pub async fn create_transaksi_manual(
             message: "Transaksi berhasil dicatat dan keuangan unit usaha telah disinkronkan.".to_string(),
             data: Some(new_trx),
         }),
-    )
+    ).into_response()
 }

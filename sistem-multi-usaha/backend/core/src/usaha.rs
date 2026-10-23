@@ -17,7 +17,7 @@ pub async fn list_usaha(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let claims = match crate::auth::require_claims(&headers, &state.jwt_secret) {
+    let claims = match require_claims(&headers, &state.jwt_secret) {
         Ok(c) => c,
         Err(err) => return err.into_response(),
     };

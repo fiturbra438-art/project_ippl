@@ -259,18 +259,22 @@ pub async fn get_anomali(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let _claims = match require_claims(&headers, &state.jwt_secret) {
+    let claims = match require_claims(&headers, &state.jwt_secret) {
         Ok(c) => c,
         Err(err) => return err.into_response(),
     };
+    let owner_id = claims.owner_id;
 
     let mut anomalis: Vec<AnomaliItem> = Vec::new();
 
     // 1. Anomali Stok Kritis dari view_produk_stok_kritis
     let rows_kritis = sqlx::query_as::<_, (i32, i32, String, String, i32, i32)>(
-        "SELECT product_id, unit_id, nama_unit, nama_produk, stok_saat_ini, batas_minimum
-         FROM view_produk_stok_kritis"
+        "SELECT v.product_id, v.unit_id, v.nama_unit, v.nama_produk, v.stok_saat_ini, v.batas_minimum
+         FROM view_produk_stok_kritis v
+         JOIN business_units b ON v.unit_id = b.id
+         WHERE b.owner_id = $1"
     )
+    .bind(owner_id as i32)
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
@@ -291,8 +295,9 @@ pub async fn get_anomali(
     let rows_defisit = sqlx::query_as::<_, (i32, String, rust_decimal::Decimal, rust_decimal::Decimal)>(
         "SELECT id, nama, pendapatan_bulan_ini, pengeluaran_bulan_ini
          FROM business_units
-         WHERE pengeluaran_bulan_ini > pendapatan_bulan_ini AND pengeluaran_bulan_ini > 0"
+         WHERE owner_id = $1 AND pengeluaran_bulan_ini > pendapatan_bulan_ini AND pengeluaran_bulan_ini > 0"
     )
+    .bind(owner_id as i32)
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();

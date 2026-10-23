@@ -341,17 +341,25 @@ pub async fn list_transfer_stok(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let _claims = match require_claims(&headers, &state.jwt_secret) {
+    let claims = match require_claims(&headers, &state.jwt_secret) {
         Ok(c) => c,
         Err(err) => return err.into_response(),
     };
+    let owner_id = claims.owner_id;
 
-    let rows = sqlx::query_as::<_, (i32, Option<i32>, Option<i32>, i32, chrono::NaiveDateTime)>(
-        "SELECT id, unit_asal_id, unit_tujuan_id, qty, tanggal
-         FROM stock_movements
-         WHERE tipe = 'transfer'
-         ORDER BY id DESC"
+    let rows = sqlx::query_as::<_, (i32, Option<i32>, Option<i32>, i32, chrono::NaiveDateTime, Option<String>, Option<String>, Option<String>, Option<i32>)>(
+        "SELECT sm.id, sm.unit_asal_id, sm.unit_tujuan_id, sm.qty, sm.tanggal, 
+                ua.nama AS nama_unit_asal, ut.nama AS nama_unit_tujuan, p.nama AS nama_produk, p.id AS produk_id
+         FROM stock_movements sm
+         LEFT JOIN business_units ua ON sm.unit_asal_id = ua.id
+         LEFT JOIN business_units ut ON sm.unit_tujuan_id = ut.id
+         LEFT JOIN inventories inv ON sm.inventory_id = inv.id
+         LEFT JOIN products p ON inv.product_id = p.id
+         WHERE sm.tipe = 'transfer' 
+           AND (ua.owner_id = $1 OR ut.owner_id = $1)
+         ORDER BY sm.id DESC"
     )
+    .bind(owner_id as i32)
     .fetch_all(&state.db)
     .await;
 
@@ -360,13 +368,13 @@ pub async fn list_transfer_stok(
             .into_iter()
             .map(|r| TransferStokModel {
                 id: r.0 as i64,
-                owner_id: 1,
+                owner_id,
                 unit_asal_id: r.1.unwrap_or(0) as i64,
-                nama_unit_asal: format!("Unit #{}", r.1.unwrap_or(0)),
+                nama_unit_asal: r.5.unwrap_or_else(|| format!("Unit #{}", r.1.unwrap_or(0))),
                 unit_tujuan_id: r.2.unwrap_or(0) as i64,
-                nama_unit_tujuan: format!("Unit #{}", r.2.unwrap_or(0)),
-                produk_id: 1,
-                nama_produk: "Transfer Barang".to_string(),
+                nama_unit_tujuan: r.6.unwrap_or_else(|| format!("Unit #{}", r.2.unwrap_or(0))),
+                produk_id: r.8.unwrap_or(1) as i64,
+                nama_produk: r.7.unwrap_or_else(|| "Transfer Barang".to_string()),
                 jumlah: r.3,
                 waktu_kirim: r.4.format("%Y-%m-%d %H:%M").to_string(),
                 waktu_terima: Some(r.4.format("%Y-%m-%d %H:%M").to_string()),
@@ -395,7 +403,34 @@ pub async fn create_transfer_stok(
         Ok(c) => c,
         Err(err) => return err.into_response(),
     };
+    let owner_id = claims.owner_id;
     let user_id = claims.user_id;
+
+    // Verifikasi unit_asal dan unit_tujuan milik owner_id ini
+    let asal_valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM business_units WHERE id = $1 AND owner_id = $2)")
+        .bind(payload.unit_asal_id as i32)
+        .bind(owner_id as i32)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(false);
+
+    let tujuan_valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM business_units WHERE id = $1 AND owner_id = $2)")
+        .bind(payload.unit_tujuan_id as i32)
+        .bind(owner_id as i32)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(false);
+
+    if !asal_valid || !tujuan_valid {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<TransferStokModel> {
+                status: "error".to_string(),
+                message: "Unit asal atau unit tujuan bukan milik Anda.".to_string(),
+                data: None,
+            }),
+        ).into_response();
+    }
 
     // Panggil Stored Procedure sp_transfer_stok_antar_unit
     let result: Result<(Option<String>, Option<String>), sqlx::Error> = sqlx::query_as(
@@ -427,7 +462,7 @@ pub async fn create_transfer_stok(
 
             let new_transfer = TransferStokModel {
                 id: chrono::Utc::now().timestamp(),
-                owner_id: 1,
+                owner_id,
                 unit_asal_id: payload.unit_asal_id,
                 nama_unit_asal: format!("Unit #{}", payload.unit_asal_id),
                 unit_tujuan_id: payload.unit_tujuan_id,
