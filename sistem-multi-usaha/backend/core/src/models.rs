@@ -38,15 +38,16 @@ pub struct KaryawanAccount {
     pub owner_id: i64, // Terikat pada owner bisnis mana
     pub nama: String,
     pub email: String,
+    #[serde(skip_serializing)]
     pub password_hash: String,
-    pub peran: PeranPengguna, // manager, kasir, admin_gudang, auditor
+    pub peran: PeranPengguna,     // manager, kasir, admin_gudang, auditor
     pub unit_akses_ids: Vec<i64>, // Unit mana saja yang boleh diakses karyawan ini
     pub is_active: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
-    pub sub: String,          // email
+    pub sub: String, // email
     pub user_id: i64,
     pub role: String,         // owner / manager / kasir / admin_gudang / auditor
     pub owner_id: i64,        // id bisnis induk

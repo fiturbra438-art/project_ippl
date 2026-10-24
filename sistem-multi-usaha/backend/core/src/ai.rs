@@ -4,10 +4,10 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use serde::Serialize;
-use std::sync::Arc;
 use chrono::{Duration, Local};
 use rust_decimal::prelude::ToPrimitive;
+use serde::Serialize;
+use std::sync::Arc;
 
 use crate::auth::require_claims;
 use crate::schemas::{ApiResponse, ChatAiRequest, ChatAiResponse};
@@ -55,7 +55,7 @@ pub async fn chat_ai(
 
     // 1. Cek & Potong Kuota AI di Database PostgreSQL
     let user_info = sqlx::query_as::<_, (i32, Option<i32>, Option<String>, Option<String>)>(
-        "SELECT id, sisa_kuota_ai, nama_perusahaan, tier FROM users WHERE id = $1"
+        "SELECT id, sisa_kuota_ai, nama_perusahaan, tier FROM users WHERE id = $1",
     )
     .bind(owner_id as i32)
     .fetch_optional(&state.db)
@@ -81,22 +81,26 @@ pub async fn chat_ai(
                 .execute(&state.db)
                 .await;
 
-            (kuota - 1, nama_opt.unwrap_or_else(|| "Grup Bisnis".to_string()))
+            (
+                kuota - 1,
+                nama_opt.unwrap_or_else(|| "Grup Bisnis".to_string()),
+            )
         }
         _ => (250, "Grup Bisnis".to_string()),
     };
 
     // 2. Baca Data Finansial Nyata dari PostgreSQL
-    let total_usaha: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM business_units WHERE owner_id = $1")
-        .bind(owner_id as i32)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or(0);
+    let total_usaha: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM business_units WHERE owner_id = $1")
+            .bind(owner_id as i32)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
 
     let total_omzet_decimal: Option<rust_decimal::Decimal> = sqlx::query_scalar(
         "SELECT SUM(t.total) FROM transactions t
          JOIN business_units u ON t.unit_id = u.id
-         WHERE u.owner_id = $1 AND t.status = 'selesai'"
+         WHERE u.owner_id = $1 AND t.status = 'selesai'",
     )
     .bind(owner_id as i32)
     .fetch_optional(&state.db)
@@ -114,7 +118,7 @@ pub async fn chat_ai(
         "SELECT p.nama, i.qty 
          FROM inventories i 
          JOIN products p ON i.product_id = p.id 
-         WHERE p.owner_id = $1 AND i.qty <= i.min_stock"
+         WHERE p.owner_id = $1 AND i.qty <= i.min_stock",
     )
     .bind(owner_id as i32)
     .fetch_all(&state.db)
@@ -122,7 +126,7 @@ pub async fn chat_ai(
     .unwrap_or_default();
 
     let unit_rows = sqlx::query_as::<_, (String, String, Option<String>)>(
-        "SELECT nama, jenis_usaha, kategori_portofolio FROM business_units WHERE owner_id = $1"
+        "SELECT nama, jenis_usaha, kategori_portofolio FROM business_units WHERE owner_id = $1",
     )
     .bind(owner_id as i32)
     .fetch_all(&state.db)
@@ -137,11 +141,21 @@ pub async fn chat_ai(
 
     let unit_names: Vec<String> = unit_rows
         .iter()
-        .map(|u| format!("- {} ({}, Kategori: {})", u.0, u.1, u.2.as_deref().unwrap_or("Umum")))
+        .map(|u| {
+            format!(
+                "- {} ({}, Kategori: {})",
+                u.0,
+                u.1,
+                u.2.as_deref().unwrap_or("Umum")
+            )
+        })
         .collect();
 
     let query_lower = payload.pesan.to_lowercase();
-    let balasan = if query_lower.contains("omzet") || query_lower.contains("pendapatan") || query_lower.contains("penjualan") {
+    let balasan = if query_lower.contains("omzet")
+        || query_lower.contains("pendapatan")
+        || query_lower.contains("penjualan")
+    {
         if total_usaha == 0 {
             "Saat ini belum ada unit usaha yang didaftarkan ke PostgreSQL. Silakan daftarkan cabang baru di menu 'Kelola Unit Usaha'.".to_string()
         } else {
@@ -150,23 +164,47 @@ pub async fn chat_ai(
                 total_omzet, total_usaha, total_produk
             )
         }
-    } else if query_lower.contains("stok") || query_lower.contains("kritis") || query_lower.contains("gudang") {
+    } else if query_lower.contains("stok")
+        || query_lower.contains("kritis")
+        || query_lower.contains("gudang")
+    {
         if total_produk == 0 {
             "Katalog inventaris masih kosong di database. Tambahkan produk melalui katalog inventaris atau kasir POS.".to_string()
         } else if produk_kritis_rows.is_empty() {
-            format!("Inventaris aman! Seluruh {} produk berada di atas batas stok minimum.", total_produk)
+            format!(
+                "Inventaris aman! Seluruh {} produk berada di atas batas stok minimum.",
+                total_produk
+            )
         } else {
-            let list = produk_kritis_rows.iter().map(|p| format!("• {} (sisa {})", p.0, p.1)).collect::<Vec<_>>().join("\n");
+            let list = produk_kritis_rows
+                .iter()
+                .map(|p| format!("• {} (sisa {})", p.0, p.1))
+                .collect::<Vec<_>>()
+                .join("\n");
             format!("⚠️ PERINGATAN STOK MINIMUM (PostgreSQL):\n{}\nSegera lakukan pengadaan atau mutasi stok.", list)
         }
-    } else if query_lower.contains("cabang") || query_lower.contains("unit") || query_lower.contains("toko") {
+    } else if query_lower.contains("cabang")
+        || query_lower.contains("unit")
+        || query_lower.contains("toko")
+    {
         if total_usaha == 0 {
             "Belum ada unit usaha yang tersimpan di database.".to_string()
         } else {
-            format!("Daftar cabang aktif di '{}':\n{}", nama_bisnis, unit_names.join("\n"))
+            format!(
+                "Daftar cabang aktif di '{}':\n{}",
+                nama_bisnis,
+                unit_names.join("\n")
+            )
         }
-    } else if query_lower.contains("saran") || query_lower.contains("strategi") || query_lower.contains("alokasi") {
-        let stars = if !star_units.is_empty() { star_units.join(", ") } else { "belum terpetakan".to_string() };
+    } else if query_lower.contains("saran")
+        || query_lower.contains("strategi")
+        || query_lower.contains("alokasi")
+    {
+        let stars = if !star_units.is_empty() {
+            star_units.join(", ")
+        } else {
+            "belum terpetakan".to_string()
+        };
         format!(
             "Rekomendasi Analisis Portofolio:\n1. Unit Kategori Star ({}): Prioritaskan suplai stok dan ekspansi pemasaran.\n2. Alokasikan surplus laba ke peningkatan modal kerja dan efisiensi biaya bahan baku.",
             stars
@@ -189,7 +227,8 @@ pub async fn chat_ai(
                 sisa_kuota_ai: sisa_kuota,
             }),
         }),
-    ).into_response()
+    )
+        .into_response()
 }
 
 // 2. FORECASTING DEMAND PENJUALAN (Dihitung Dinamis dari Histori Transaksi Riil PostgreSQL)
@@ -240,7 +279,9 @@ pub async fn get_forecast(
         unit_id,
         nama_unit,
         tren: "Proyeksi Meningkat (+12.4%)".to_string(),
-        rekomendasi_stok: "Berdasarkan histori transaksi riil, siapkan penambahan stok 20% menjelang akhir pekan.".to_string(),
+        rekomendasi_stok:
+            "Berdasarkan histori transaksi riil, siapkan penambahan stok 20% menjelang akhir pekan."
+                .to_string(),
         proyeksi_7_hari: proyeksi,
     };
 
@@ -251,7 +292,8 @@ pub async fn get_forecast(
             message: "Forecasting berhasil dihitung dinamis dari data PostgreSQL.".to_string(),
             data: Some(res),
         }),
-    ).into_response()
+    )
+        .into_response()
 }
 
 // 3. DETEKSI ANOMALI BISNIS (Membaca Langsung dari View PostgreSQL)
@@ -286,8 +328,12 @@ pub async fn get_anomali(
             nama_unit: r.2,
             tingkat_bahaya: "Kritis".to_string(),
             judul: format!("Stok Kritis: {}", r.3),
-            deskripsi: format!("Sisa stok {} unit, berada di bawah batas minimum ({} unit).", r.4, r.5),
-            rekomendasi: "Segera lakukan pemesanan ulang atau mutasi stok dari gudang cabang lain.".to_string(),
+            deskripsi: format!(
+                "Sisa stok {} unit, berada di bawah batas minimum ({} unit).",
+                r.4, r.5
+            ),
+            rekomendasi: "Segera lakukan pemesanan ulang atau mutasi stok dari gudang cabang lain."
+                .to_string(),
         });
     }
 
@@ -311,7 +357,12 @@ pub async fn get_anomali(
             nama_unit: d.1,
             tingkat_bahaya: "Sedang".to_string(),
             judul: "Defisit Operasional Cabang".to_string(),
-            deskripsi: format!("Pengeluaran (Rp {:.0}) melebihi pendapatan (Rp {:.0}). Defisit: Rp {:.0}", b, p, b - p),
+            deskripsi: format!(
+                "Pengeluaran (Rp {:.0}) melebihi pendapatan (Rp {:.0}). Defisit: Rp {:.0}",
+                b,
+                p,
+                b - p
+            ),
             rekomendasi: "Audit pos pengeluaran operasional cabang ini.".to_string(),
         });
     }
@@ -320,8 +371,12 @@ pub async fn get_anomali(
         StatusCode::OK,
         Json(ApiResponse::<Vec<AnomaliItem>> {
             status: "success".to_string(),
-            message: format!("Deteksi anomali selesai. Ditemukan {} anomali bisnis.", anomalis.len()),
+            message: format!(
+                "Deteksi anomali selesai. Ditemukan {} anomali bisnis.",
+                anomalis.len()
+            ),
             data: Some(anomalis),
         }),
-    ).into_response()
+    )
+        .into_response()
 }

@@ -4,9 +4,9 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use rust_decimal::prelude::ToPrimitive;
 
 use crate::auth::require_claims;
 use crate::models::PaketLangganan;
@@ -71,7 +71,7 @@ pub async fn get_dashboard_summary(
 
     // Ambil data paket & kuota dari tabel PostgreSQL `users`
     let user_row = sqlx::query_as::<_, (Option<String>, Option<i32>)>(
-        "SELECT tier, sisa_kuota_ai FROM users WHERE id = $1"
+        "SELECT tier, sisa_kuota_ai FROM users WHERE id = $1",
     )
     .bind(owner_id as i32)
     .fetch_optional(&state.db)
@@ -89,7 +89,7 @@ pub async fn get_dashboard_summary(
     let usaha_rows = sqlx::query_as::<_, (i32, String, String, Option<String>)>(
         "SELECT id, nama, jenis_usaha, kategori_portofolio 
          FROM business_units 
-         WHERE owner_id = $1"
+         WHERE owner_id = $1",
     )
     .bind(owner_id as i32)
     .fetch_all(&state.db)
@@ -115,7 +115,11 @@ pub async fn get_dashboard_summary(
         // Pengeluaran operasional (default atau dari cash_flows jika ada)
         let pengeluaran = 0.0;
         let laba = pendapatan - pengeluaran;
-        let margin = if pendapatan > 0.0 { (laba / pendapatan) * 100.0 } else { 0.0 };
+        let margin = if pendapatan > 0.0 {
+            (laba / pendapatan) * 100.0
+        } else {
+            0.0
+        };
 
         total_pendapatan += pendapatan;
         total_pengeluaran += pengeluaran;
@@ -133,7 +137,11 @@ pub async fn get_dashboard_summary(
     }
 
     let laba_bersih = total_pendapatan - total_pengeluaran;
-    let margin_persen = if total_pendapatan > 0.0 { (laba_bersih / total_pendapatan) * 100.0 } else { 0.0 };
+    let margin_persen = if total_pendapatan > 0.0 {
+        (laba_bersih / total_pendapatan) * 100.0
+    } else {
+        0.0
+    };
 
     // Hitung produk kritis dari view PostgreSQL
     let total_produk_kritis: i64 = sqlx::query_scalar(
@@ -160,10 +168,12 @@ pub async fn get_dashboard_summary(
         StatusCode::OK,
         Json(ApiResponse::<KonsolidasiDashboardResponse> {
             status: "success".to_string(),
-            message: "Ringkasan konsolidasi multi-usaha berhasil dihitung dari PostgreSQL.".to_string(),
+            message: "Ringkasan konsolidasi multi-usaha berhasil dihitung dari PostgreSQL."
+                .to_string(),
             data: Some(res),
         }),
-    ).into_response()
+    )
+        .into_response()
 }
 
 // 2. LAPORAN KEUANGAN & ARUS KAS (Strict Auth dari PostgreSQL)
@@ -183,7 +193,7 @@ pub async fn get_laporan_keuangan(
             "SELECT t.total, t.metode_bayar 
              FROM transactions t
              JOIN business_units u ON t.unit_id = u.id
-             WHERE u.owner_id = $1 AND t.unit_id = $2 AND t.status = 'selesai'"
+             WHERE u.owner_id = $1 AND t.unit_id = $2 AND t.status = 'selesai'",
         )
         .bind(owner_id as i32)
         .bind(uid as i32)
@@ -194,7 +204,7 @@ pub async fn get_laporan_keuangan(
             "SELECT t.total, t.metode_bayar 
              FROM transactions t
              JOIN business_units u ON t.unit_id = u.id
-             WHERE u.owner_id = $1 AND t.status = 'selesai'"
+             WHERE u.owner_id = $1 AND t.status = 'selesai'",
         )
         .bind(owner_id as i32)
         .fetch_all(&state.db)
@@ -209,7 +219,9 @@ pub async fn get_laporan_keuangan(
         for (total_dec, metode) in trxs {
             let jml = total_dec.to_f64().unwrap_or(0.0);
             total_pemasukan += jml;
-            *map_pemasukan.entry(format!("Penjualan ({})", metode)).or_insert(0.0) += jml;
+            *map_pemasukan
+                .entry(format!("Penjualan ({})", metode))
+                .or_insert(0.0) += jml;
         }
     }
 
@@ -233,5 +245,6 @@ pub async fn get_laporan_keuangan(
             message: "Laporan keuangan berhasil dihitung dari PostgreSQL.".to_string(),
             data: Some(res),
         }),
-    ).into_response()
+    )
+        .into_response()
 }

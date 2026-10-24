@@ -4,14 +4,16 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use std::sync::Arc;
 use chrono::Local;
+use std::sync::Arc;
 
 use crate::auth::require_claims;
-use crate::models::{PermintaanStokModel, StatusPermintaanStok, StatusTransfer, StokOpnameModel, TransferStokModel};
+use crate::models::{
+    PermintaanStokModel, StatusPermintaanStok, StatusTransfer, StokOpnameModel, TransferStokModel,
+};
 use crate::schemas::{
-    ApiResponse, CreatePermintaanStokRequest, CreateStokOpnameRequest,
-    CreateTransferStokRequest, UpdateStatusPermintaanRequest, UpdateStatusTransferRequest,
+    ApiResponse, CreatePermintaanStokRequest, CreateStokOpnameRequest, CreateTransferStokRequest,
+    UpdateStatusPermintaanRequest, UpdateStatusTransferRequest,
 };
 use crate::state::AppState;
 
@@ -65,10 +67,14 @@ pub async fn list_permintaan_stok(
         StatusCode::OK,
         Json(ApiResponse::<Vec<PermintaanStokModel>> {
             status: "success".to_string(),
-            message: format!("Berhasil mengambil {} pengajuan permintaan stok dari PostgreSQL.", hasil.len()),
+            message: format!(
+                "Berhasil mengambil {} pengajuan permintaan stok dari PostgreSQL.",
+                hasil.len()
+            ),
             data: Some(hasil),
         }),
-    ).into_response()
+    )
+        .into_response()
 }
 
 pub async fn create_permintaan_stok(
@@ -82,6 +88,26 @@ pub async fn create_permintaan_stok(
     };
     let owner_id = claims.owner_id;
     let pemohon = claims.sub.clone();
+
+    let unit_valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM business_units WHERE id = $1 AND owner_id = $2)",
+    )
+    .bind(payload.unit_id as i32)
+    .bind(owner_id as i32)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(false);
+    if !unit_valid {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<PermintaanStokModel> {
+                status: "error".to_string(),
+                message: "Unit usaha bukan milik bisnis Anda.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
 
     // Ambil nama unit
     let nama_unit: String = sqlx::query_scalar("SELECT nama FROM business_units WHERE id = $1")
@@ -126,21 +152,22 @@ pub async fn create_permintaan_stok(
                 StatusCode::CREATED,
                 Json(ApiResponse::<PermintaanStokModel> {
                     status: "success".to_string(),
-                    message: "Pengajuan permintaan stok tersimpan permanen di database PostgreSQL.".to_string(),
+                    message: "Pengajuan permintaan stok tersimpan permanen di database PostgreSQL."
+                        .to_string(),
                     data: Some(new_permintaan),
                 }),
-            ).into_response()
+            )
+                .into_response()
         }
-        Err(e) => {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<PermintaanStokModel> {
-                    status: "error".to_string(),
-                    message: format!("Gagal menyimpan pengajuan: {}", e),
-                    data: None,
-                }),
-            ).into_response()
-        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<PermintaanStokModel> {
+                status: "error".to_string(),
+                message: format!("Gagal menyimpan pengajuan: {}", e),
+                data: None,
+            }),
+        )
+            .into_response(),
     }
 }
 
@@ -150,15 +177,16 @@ pub async fn update_status_permintaan(
     Path(id): Path<i64>,
     Json(payload): Json<UpdateStatusPermintaanRequest>,
 ) -> impl IntoResponse {
-    let _claims = match require_claims(&headers, &state.jwt_secret) {
+    let claims = match require_claims(&headers, &state.jwt_secret) {
         Ok(c) => c,
         Err(err) => return err.into_response(),
     };
 
     let status_str = format!("{:?}", payload.status).to_lowercase();
-    let res = sqlx::query("UPDATE stock_requests SET status = $1 WHERE id = $2")
+    let res = sqlx::query("UPDATE stock_requests SET status = $1 WHERE id = $2 AND owner_id = $3")
         .bind(&status_str)
         .bind(id as i32)
+        .bind(claims.owner_id as i32)
         .execute(&state.db)
         .await;
 
@@ -167,10 +195,14 @@ pub async fn update_status_permintaan(
             StatusCode::OK,
             Json(ApiResponse::<()> {
                 status: "success".to_string(),
-                message: format!("Status permintaan stok #{} berhasil diperbarui ke: {}", id, status_str),
+                message: format!(
+                    "Status permintaan stok #{} berhasil diperbarui ke: {}",
+                    id, status_str
+                ),
                 data: None,
             }),
-        ).into_response(),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(ApiResponse::<()> {
@@ -178,7 +210,8 @@ pub async fn update_status_permintaan(
                 message: format!("Gagal update status: {}", e),
                 data: None,
             }),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -230,7 +263,8 @@ pub async fn list_stok_opname(
             message: format!("Berhasil mengambil {} catatan stok opname.", hasil.len()),
             data: Some(hasil),
         }),
-    ).into_response()
+    )
+        .into_response()
 }
 
 pub async fn create_stok_opname(
@@ -243,6 +277,26 @@ pub async fn create_stok_opname(
         Err(err) => return err.into_response(),
     };
     let owner_id = claims.owner_id;
+
+    let unit_valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM business_units WHERE id = $1 AND owner_id = $2)",
+    )
+    .bind(payload.unit_id as i32)
+    .bind(owner_id as i32)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(false);
+    if !unit_valid {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<StokOpnameModel> {
+                status: "error".to_string(),
+                message: "Unit usaha bukan milik bisnis Anda.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
 
     // Ambil nama unit
     let nama_unit: String = sqlx::query_scalar("SELECT nama FROM business_units WHERE id = $1")
@@ -257,7 +311,7 @@ pub async fn create_stok_opname(
     let stok_sistem: i32 = sqlx::query_scalar(
         "SELECT i.qty FROM inventories i
          JOIN products p ON i.product_id = p.id
-         WHERE i.unit_id = $1 AND LOWER(p.nama) = LOWER($2)"
+         WHERE i.unit_id = $1 AND LOWER(p.nama) = LOWER($2)",
     )
     .bind(payload.unit_id as i32)
     .bind(&payload.nama_produk)
@@ -322,16 +376,15 @@ pub async fn create_stok_opname(
                 }),
             ).into_response()
         }
-        Err(e) => {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<StokOpnameModel> {
-                    status: "error".to_string(),
-                    message: format!("Gagal menyimpan opname: {}", e),
-                    data: None,
-                }),
-            ).into_response()
-        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<StokOpnameModel> {
+                status: "error".to_string(),
+                message: format!("Gagal menyimpan opname: {}", e),
+                data: None,
+            }),
+        )
+            .into_response(),
     }
 }
 
@@ -388,10 +441,14 @@ pub async fn list_transfer_stok(
         StatusCode::OK,
         Json(ApiResponse::<Vec<TransferStokModel>> {
             status: "success".to_string(),
-            message: format!("Berhasil mengambil {} mutasi transfer stok dari database.", hasil.len()),
+            message: format!(
+                "Berhasil mengambil {} mutasi transfer stok dari database.",
+                hasil.len()
+            ),
             data: Some(hasil),
         }),
-    ).into_response()
+    )
+        .into_response()
 }
 
 pub async fn create_transfer_stok(
@@ -407,19 +464,23 @@ pub async fn create_transfer_stok(
     let user_id = claims.user_id;
 
     // Verifikasi unit_asal dan unit_tujuan milik owner_id ini
-    let asal_valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM business_units WHERE id = $1 AND owner_id = $2)")
-        .bind(payload.unit_asal_id as i32)
-        .bind(owner_id as i32)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or(false);
+    let asal_valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM business_units WHERE id = $1 AND owner_id = $2)",
+    )
+    .bind(payload.unit_asal_id as i32)
+    .bind(owner_id as i32)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(false);
 
-    let tujuan_valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM business_units WHERE id = $1 AND owner_id = $2)")
-        .bind(payload.unit_tujuan_id as i32)
-        .bind(owner_id as i32)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or(false);
+    let tujuan_valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM business_units WHERE id = $1 AND owner_id = $2)",
+    )
+    .bind(payload.unit_tujuan_id as i32)
+    .bind(owner_id as i32)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(false);
 
     if !asal_valid || !tujuan_valid {
         return (
@@ -429,25 +490,26 @@ pub async fn create_transfer_stok(
                 message: "Unit asal atau unit tujuan bukan milik Anda.".to_string(),
                 data: None,
             }),
-        ).into_response();
+        )
+            .into_response();
     }
 
     // Panggil Stored Procedure sp_transfer_stok_antar_unit
-    let result: Result<(Option<String>, Option<String>), sqlx::Error> = sqlx::query_as(
-        "CALL sp_transfer_stok_antar_unit($1, $2, $3, $4, $5, NULL, NULL)"
-    )
-    .bind(payload.unit_asal_id as i32)
-    .bind(payload.unit_tujuan_id as i32)
-    .bind(payload.produk_id as i32)
-    .bind(payload.jumlah)
-    .bind(user_id as i32)
-    .fetch_one(&state.db)
-    .await;
+    let result: Result<(Option<String>, Option<String>), sqlx::Error> =
+        sqlx::query_as("CALL sp_transfer_stok_antar_unit($1, $2, $3, $4, $5, NULL, NULL)")
+            .bind(payload.unit_asal_id as i32)
+            .bind(payload.unit_tujuan_id as i32)
+            .bind(payload.produk_id as i32)
+            .bind(payload.jumlah)
+            .bind(user_id as i32)
+            .fetch_one(&state.db)
+            .await;
 
     match result {
         Ok((status_opt, pesan_opt)) => {
             let status_str = status_opt.unwrap_or_else(|| "error".to_string());
-            let pesan_str = pesan_opt.unwrap_or_else(|| "Gagal memproses transfer stok.".to_string());
+            let pesan_str =
+                pesan_opt.unwrap_or_else(|| "Gagal memproses transfer stok.".to_string());
 
             if status_str == "error" {
                 return (
@@ -457,7 +519,8 @@ pub async fn create_transfer_stok(
                         message: pesan_str,
                         data: None,
                     }),
-                ).into_response();
+                )
+                    .into_response();
             }
 
             let new_transfer = TransferStokModel {
@@ -482,27 +545,55 @@ pub async fn create_transfer_stok(
                     message: pesan_str,
                     data: Some(new_transfer),
                 }),
-            ).into_response()
+            )
+                .into_response()
         }
-        Err(e) => {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<TransferStokModel> {
-                    status: "error".to_string(),
-                    message: format!("Error database: {}", e),
-                    data: None,
-                }),
-            ).into_response()
-        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<TransferStokModel> {
+                status: "error".to_string(),
+                message: format!("Error database: {}", e),
+                data: None,
+            }),
+        )
+            .into_response(),
     }
 }
 
 pub async fn update_status_transfer(
-    State(_state): State<Arc<AppState>>,
-    _headers: HeaderMap,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(payload): Json<UpdateStatusTransferRequest>,
 ) -> impl IntoResponse {
+    let claims = match require_claims(&headers, &state.jwt_secret) {
+        Ok(c) => c,
+        Err(err) => return err.into_response(),
+    };
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM stock_movements sm
+            LEFT JOIN business_units ua ON ua.id = sm.unit_asal_id
+            LEFT JOIN business_units ut ON ut.id = sm.unit_tujuan_id
+            WHERE sm.id = $1 AND (ua.owner_id = $2 OR ut.owner_id = $2)
+        )",
+    )
+    .bind(id as i32)
+    .bind(claims.owner_id as i32)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(false);
+    if !exists {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<()> {
+                status: "error".to_string(),
+                message: "Transfer tidak ditemukan.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
     (
         StatusCode::OK,
         Json(ApiResponse::<()> {
@@ -511,4 +602,5 @@ pub async fn update_status_transfer(
             data: None,
         }),
     )
+        .into_response()
 }

@@ -4,9 +4,9 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use rust_decimal::prelude::ToPrimitive;
 use serde::Deserialize;
 use std::sync::Arc;
-use rust_decimal::prelude::ToPrimitive;
 
 use crate::auth::require_claims;
 use crate::models::ProdukModel;
@@ -77,10 +77,14 @@ pub async fn list_produk(
         StatusCode::OK,
         Json(ApiResponse::<Vec<ProdukModel>> {
             status: "success".to_string(),
-            message: format!("Berhasil mengambil {} produk dari database PostgreSQL.", hasil.len()),
+            message: format!(
+                "Berhasil mengambil {} produk dari database PostgreSQL.",
+                hasil.len()
+            ),
             data: Some(hasil),
         }),
-    ).into_response()
+    )
+        .into_response()
 }
 
 // 2. PRODUK STOK KRITIS (Membaca langsung dari VIEW view_produk_stok_kritis)
@@ -126,24 +130,34 @@ pub async fn list_low_stock(
         StatusCode::OK,
         Json(ApiResponse::<Vec<ProdukModel>> {
             status: "success".to_string(),
-            message: format!("Terdapat {} produk dengan stok kritis (View Database).", kritis.len()),
+            message: format!(
+                "Terdapat {} produk dengan stok kritis (View Database).",
+                kritis.len()
+            ),
             data: Some(kritis),
         }),
-    ).into_response()
+    )
+        .into_response()
 }
 
 // 3. DETAIL PRODUK
 pub async fn get_produk_detail(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
+    let claims = match require_claims(&headers, &state.jwt_secret) {
+        Ok(c) => c,
+        Err(err) => return err.into_response(),
+    };
     let row = sqlx::query_as::<_, (i32, i32, i32, String, String, rust_decimal::Decimal, rust_decimal::Decimal, i32, i32)>(
         "SELECT p.id, p.owner_id, COALESCE(i.unit_id, 1), p.nama, p.sku, p.harga_beli, p.harga_jual, COALESCE(i.qty, 0), COALESCE(i.min_stock, 5)
          FROM products p
          LEFT JOIN inventories i ON p.id = i.product_id
-         WHERE p.id = $1"
+          WHERE p.id = $1 AND p.owner_id = $2"
     )
     .bind(id as i32)
+    .bind(claims.owner_id as i32)
     .fetch_optional(&state.db)
     .await;
 
@@ -165,7 +179,8 @@ pub async fn get_produk_detail(
                     min_stok: r.8,
                 }),
             }),
-        ),
+        )
+            .into_response(),
         _ => (
             StatusCode::NOT_FOUND,
             Json(ApiResponse::<ProdukModel> {
@@ -173,7 +188,8 @@ pub async fn get_produk_detail(
                 message: "Produk tidak ditemukan di database.".to_string(),
                 data: None,
             }),
-        ),
+        )
+            .into_response(),
     }
 }
 
@@ -189,6 +205,26 @@ pub async fn create_produk(
     };
     let owner_id = claims.owner_id;
     let aktor_role = claims.role.as_str();
+
+    let unit_valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM business_units WHERE id = $1 AND owner_id = $2)",
+    )
+    .bind(payload.unit_id as i32)
+    .bind(owner_id as i32)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(false);
+    if !unit_valid {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<ProdukModel> {
+                status: "error".to_string(),
+                message: "Unit usaha bukan milik bisnis Anda.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
 
     // Validasi wewenang: Kasir dilarang mengatur harga dan membuat produk baru
     if aktor_role == "kasir" {
@@ -228,14 +264,15 @@ pub async fn create_produk(
                     message: format!("Gagal menyimpan produk: {}", e),
                     data: None,
                 }),
-            ).into_response();
+            )
+                .into_response();
         }
     };
 
     // 2. Insert ke PostgreSQL `inventories`
     let _ = sqlx::query(
         "INSERT INTO inventories (unit_id, product_id, qty, min_stock, created_at)
-         VALUES ($1, $2, $3, $4, now())"
+         VALUES ($1, $2, $3, $4, now())",
     )
     .bind(payload.unit_id as i32)
     .bind(prod_id)
@@ -260,10 +297,12 @@ pub async fn create_produk(
         StatusCode::CREATED,
         Json(ApiResponse::<ProdukModel> {
             status: "success".to_string(),
-            message: "Produk berhasil ditambahkan dan tersimpan permanen di database PostgreSQL.".to_string(),
+            message: "Produk berhasil ditambahkan dan tersimpan permanen di database PostgreSQL."
+                .to_string(),
             data: Some(new_produk),
         }),
-    ).into_response()
+    )
+        .into_response()
 }
 
 // 5. UPDATE PRODUK (PostgreSQL update)
@@ -279,6 +318,25 @@ pub async fn update_produk(
     };
     let aktor_role = claims.role.as_str();
 
+    let product_valid: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM products WHERE id = $1 AND owner_id = $2)")
+            .bind(id as i32)
+            .bind(claims.owner_id as i32)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(false);
+    if !product_valid {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<ProdukModel> {
+                status: "error".to_string(),
+                message: "Produk tidak ditemukan.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
+
     if aktor_role == "kasir" && (payload.harga_beli.is_some() || payload.harga_jual.is_some()) {
         return (
             StatusCode::FORBIDDEN,
@@ -291,27 +349,39 @@ pub async fn update_produk(
     }
 
     if let Some(nama) = &payload.nama {
-        let _ = sqlx::query("UPDATE products SET nama = $1 WHERE id = $2").bind(nama).bind(id as i32).execute(&state.db).await;
+        let _ = sqlx::query("UPDATE products SET nama = $1 WHERE id = $2 AND owner_id = $3")
+            .bind(nama)
+            .bind(id as i32)
+            .bind(claims.owner_id as i32)
+            .execute(&state.db)
+            .await;
     }
     if let Some(sku) = &payload.sku {
-        let _ = sqlx::query("UPDATE products SET sku = $1 WHERE id = $2").bind(sku).bind(id as i32).execute(&state.db).await;
+        let _ = sqlx::query("UPDATE products SET sku = $1 WHERE id = $2 AND owner_id = $3")
+            .bind(sku)
+            .bind(id as i32)
+            .bind(claims.owner_id as i32)
+            .execute(&state.db)
+            .await;
     }
     if let Some(hb) = payload.harga_beli {
-        let _ = sqlx::query("UPDATE products SET harga_beli = $1 WHERE id = $2")
+        let _ = sqlx::query("UPDATE products SET harga_beli = $1 WHERE id = $2 AND owner_id = $3")
             .bind(rust_decimal::Decimal::from_f64_retain(hb).unwrap_or_default())
             .bind(id as i32)
+            .bind(claims.owner_id as i32)
             .execute(&state.db)
             .await;
     }
     if let Some(hj) = payload.harga_jual {
-        let _ = sqlx::query("UPDATE products SET harga_jual = $1 WHERE id = $2")
+        let _ = sqlx::query("UPDATE products SET harga_jual = $1 WHERE id = $2 AND owner_id = $3")
             .bind(rust_decimal::Decimal::from_f64_retain(hj).unwrap_or_default())
             .bind(id as i32)
+            .bind(claims.owner_id as i32)
             .execute(&state.db)
             .await;
     }
     if let Some(stok) = payload.stok {
-        let _ = sqlx::query("UPDATE inventories SET qty = $1 WHERE product_id = $2").bind(stok).bind(id as i32).execute(&state.db).await;
+        let _ = sqlx::query("UPDATE inventories SET qty = $1 WHERE product_id = $2 AND unit_id IN (SELECT id FROM business_units WHERE owner_id = $3)").bind(stok).bind(id as i32).bind(claims.owner_id as i32).execute(&state.db).await;
     }
 
     (
@@ -321,20 +391,38 @@ pub async fn update_produk(
             message: "Data produk di PostgreSQL berhasil diperbarui.".to_string(),
             data: None,
         }),
-    ).into_response()
+    )
+        .into_response()
 }
 
 // 6. PENYESUAIAN STOK CEPAT
 pub async fn adjust_stok(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(id): Path<i64>,
     Json(payload): Json<AdjustStokRequest>,
 ) -> impl IntoResponse {
+    let claims = match require_claims(&headers, &state.jwt_secret) {
+        Ok(c) => c,
+        Err(err) => return err.into_response(),
+    };
+    if !["owner", "manager", "admin_gudang"].contains(&claims.role.as_str()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<()> {
+                status: "error".to_string(),
+                message: "Role tidak boleh mengubah stok.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
     let res = sqlx::query(
-        "UPDATE inventories SET qty = GREATEST(0, qty + $1) WHERE product_id = $2"
+        "UPDATE inventories SET qty = GREATEST(0, qty + $1) WHERE product_id = $2 AND unit_id IN (SELECT id FROM business_units WHERE owner_id = $3)"
     )
     .bind(payload.penambahan)
     .bind(id as i32)
+    .bind(claims.owner_id as i32)
     .execute(&state.db)
     .await;
 
@@ -343,10 +431,14 @@ pub async fn adjust_stok(
             StatusCode::OK,
             Json(ApiResponse::<()> {
                 status: "success".to_string(),
-                message: format!("Stok produk #{} berhasil disesuaikan ({}) di database.", id, payload.penambahan),
+                message: format!(
+                    "Stok produk #{} berhasil disesuaikan ({}) di database.",
+                    id, payload.penambahan
+                ),
                 data: None,
             }),
-        ),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(ApiResponse::<()> {
@@ -354,17 +446,38 @@ pub async fn adjust_stok(
                 message: format!("Gagal update stok: {}", e),
                 data: None,
             }),
-        ),
+        )
+            .into_response(),
     }
 }
 
 // 7. HAPUS PRODUK
 pub async fn delete_produk(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    let _ = sqlx::query("DELETE FROM inventories WHERE product_id = $1").bind(id as i32).execute(&state.db).await;
-    let res = sqlx::query("DELETE FROM products WHERE id = $1").bind(id as i32).execute(&state.db).await;
+    let claims = match require_claims(&headers, &state.jwt_secret) {
+        Ok(c) => c,
+        Err(err) => return err.into_response(),
+    };
+    if !["owner", "manager"].contains(&claims.role.as_str()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<()> {
+                status: "error".to_string(),
+                message: "Role tidak boleh menghapus produk.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
+    let _ = sqlx::query("DELETE FROM inventories WHERE product_id = $1 AND unit_id IN (SELECT id FROM business_units WHERE owner_id = $2)").bind(id as i32).bind(claims.owner_id as i32).execute(&state.db).await;
+    let res = sqlx::query("DELETE FROM products WHERE id = $1 AND owner_id = $2")
+        .bind(id as i32)
+        .bind(claims.owner_id as i32)
+        .execute(&state.db)
+        .await;
 
     match res {
         Ok(_) => (
@@ -374,7 +487,8 @@ pub async fn delete_produk(
                 message: format!("Produk #{} berhasil dihapus dari database PostgreSQL.", id),
                 data: None,
             }),
-        ),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::BAD_REQUEST,
             Json(ApiResponse::<()> {
@@ -382,6 +496,7 @@ pub async fn delete_produk(
                 message: format!("Gagal menghapus produk: {}", e),
                 data: None,
             }),
-        ),
+        )
+            .into_response(),
     }
 }

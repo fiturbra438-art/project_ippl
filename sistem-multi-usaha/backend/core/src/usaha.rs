@@ -4,8 +4,8 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use std::sync::Arc;
 use chrono::Local;
+use std::sync::Arc;
 
 use crate::auth::require_claims;
 use crate::models::{AuditLogModel, UsahaModel};
@@ -50,7 +50,8 @@ pub async fn list_usaha(
             message: format!("Berhasil mengambil {} unit usaha.", hasil.len()),
             data: Some(hasil),
         }),
-    ).into_response()
+    )
+        .into_response()
 }
 
 // 2. DETAIL UNIT USAHA (Dilindungi Validasi Kepemilikan)
@@ -64,10 +65,22 @@ pub async fn get_usaha_detail(
         Err(err) => return err.into_response(),
     };
 
-    let row = sqlx::query_as::<_, (i32, i32, String, String, Option<String>, Option<String>, bool, Option<bool>)>(
+    let row = sqlx::query_as::<
+        _,
+        (
+            i32,
+            i32,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            bool,
+            Option<bool>,
+        ),
+    >(
         "SELECT id, owner_id, nama, jenis_usaha, lokasi, kategori_portofolio, status, has_pos 
          FROM business_units 
-         WHERE id = $1 AND owner_id = $2"
+         WHERE id = $1 AND owner_id = $2",
     )
     .bind(id as i32)
     .bind(claims.owner_id as i32)
@@ -94,15 +107,18 @@ pub async fn get_usaha_detail(
                     has_pos: u.7.unwrap_or(true),
                 }),
             }),
-        ).into_response(),
+        )
+            .into_response(),
         _ => (
             StatusCode::NOT_FOUND,
             Json(ApiResponse::<UsahaModel> {
                 status: "error".to_string(),
-                message: "Unit usaha tidak ditemukan atau Anda tidak memiliki hak akses.".to_string(),
+                message: "Unit usaha tidak ditemukan atau Anda tidak memiliki hak akses."
+                    .to_string(),
                 data: None,
             }),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }
 
@@ -132,7 +148,8 @@ pub async fn create_usaha(
                     message: "Akun owner tidak valid.".to_string(),
                     data: None,
                 }),
-            ).into_response();
+            )
+                .into_response();
         }
     };
     drop(owners);
@@ -181,7 +198,9 @@ pub async fn create_usaha(
         nama: payload.nama.clone(),
         jenis_usaha: payload.jenis_usaha,
         lokasi: payload.lokasi,
-        kategori_portofolio: payload.kategori_portofolio.unwrap_or_else(|| "Star".to_string()),
+        kategori_portofolio: payload
+            .kategori_portofolio
+            .unwrap_or_else(|| "Star".to_string()),
         pendapatan_bulan_ini: 0.0,
         pengeluaran_bulan_ini: 0.0,
         pertumbuhan_persen: 0.0,
@@ -207,14 +226,15 @@ pub async fn create_usaha(
         waktu: Local::now().format("%Y-%m-%d %H:%M").to_string(),
     });
 
-        (
-            StatusCode::CREATED,
-            Json(ApiResponse::<UsahaModel> {
-                status: "success".to_string(),
-                message: "Unit usaha baru berhasil didaftarkan.".to_string(),
-                data: Some(new_usaha),
-            }),
-        ).into_response()
+    (
+        StatusCode::CREATED,
+        Json(ApiResponse::<UsahaModel> {
+            status: "success".to_string(),
+            message: "Unit usaha baru berhasil didaftarkan.".to_string(),
+            data: Some(new_usaha),
+        }),
+    )
+        .into_response()
 }
 
 // 4. UPDATE UNIT USAHA (Dilindungi Validasi IDOR)
@@ -230,32 +250,51 @@ pub async fn update_usaha(
     };
 
     // Validasi apakah unit ini benar-benar milik owner yang sedang login
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM business_units WHERE id = $1 AND owner_id = $2)")
-        .bind(id as i32)
-        .bind(claims.owner_id as i32)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or(false);
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM business_units WHERE id = $1 AND owner_id = $2)",
+    )
+    .bind(id as i32)
+    .bind(claims.owner_id as i32)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(false);
 
     if !exists {
         return (
             StatusCode::FORBIDDEN,
             Json(ApiResponse::<UsahaModel> {
                 status: "error".to_string(),
-                message: "Akses ditolak: Anda tidak memiliki izin untuk mengedit unit usaha ini.".to_string(),
+                message: "Akses ditolak: Anda tidak memiliki izin untuk mengedit unit usaha ini."
+                    .to_string(),
                 data: None,
             }),
-        ).into_response();
+        )
+            .into_response();
     }
 
     let mut usahas = state.usahas.write().await;
-    if let Some(u) = usahas.iter_mut().find(|u| u.id == id && u.owner_id == claims.owner_id) {
-        if let Some(nama) = payload.nama { u.nama = nama; }
-        if let Some(jenis) = payload.jenis_usaha { u.jenis_usaha = jenis; }
-        if let Some(lokasi) = payload.lokasi { u.lokasi = lokasi; }
-        if let Some(kat) = payload.kategori_portofolio { u.kategori_portofolio = kat; }
-        if let Some(status) = payload.status { u.status = status; }
-        if let Some(has_pos) = payload.has_pos { u.has_pos = has_pos; }
+    if let Some(u) = usahas
+        .iter_mut()
+        .find(|u| u.id == id && u.owner_id == claims.owner_id)
+    {
+        if let Some(nama) = payload.nama {
+            u.nama = nama;
+        }
+        if let Some(jenis) = payload.jenis_usaha {
+            u.jenis_usaha = jenis;
+        }
+        if let Some(lokasi) = payload.lokasi {
+            u.lokasi = lokasi;
+        }
+        if let Some(kat) = payload.kategori_portofolio {
+            u.kategori_portofolio = kat;
+        }
+        if let Some(status) = payload.status {
+            u.status = status;
+        }
+        if let Some(has_pos) = payload.has_pos {
+            u.has_pos = has_pos;
+        }
 
         let _ = sqlx::query(
             "UPDATE business_units SET nama = $1, jenis_usaha = $2, lokasi = $3, kategori_portofolio = $4, status = $5, has_pos = $6 WHERE id = $7 AND owner_id = $8"
@@ -278,7 +317,8 @@ pub async fn update_usaha(
                 message: "Data unit usaha berhasil diperbarui.".to_string(),
                 data: Some(u.clone()),
             }),
-        ).into_response();
+        )
+            .into_response();
     }
 
     (
@@ -288,7 +328,8 @@ pub async fn update_usaha(
             message: "Unit usaha tidak ditemukan.".to_string(),
             data: None,
         }),
-    ).into_response()
+    )
+        .into_response()
 }
 
 // 5. TOGGLE STATUS POS (Dilindungi Validasi IDOR)
@@ -303,16 +344,20 @@ pub async fn toggle_pos(
     };
 
     let mut usahas = state.usahas.write().await;
-    if let Some(u) = usahas.iter_mut().find(|u| u.id == id && u.owner_id == claims.owner_id) {
+    if let Some(u) = usahas
+        .iter_mut()
+        .find(|u| u.id == id && u.owner_id == claims.owner_id)
+    {
         u.has_pos = !u.has_pos;
         let status_str = if u.has_pos { "Aktif" } else { "Non-Aktif" };
 
-        let _ = sqlx::query("UPDATE business_units SET has_pos = $1 WHERE id = $2 AND owner_id = $3")
-            .bind(u.has_pos)
-            .bind(id as i32)
-            .bind(claims.owner_id as i32)
-            .execute(&state.db)
-            .await;
+        let _ =
+            sqlx::query("UPDATE business_units SET has_pos = $1 WHERE id = $2 AND owner_id = $3")
+                .bind(u.has_pos)
+                .bind(id as i32)
+                .bind(claims.owner_id as i32)
+                .execute(&state.db)
+                .await;
 
         return (
             StatusCode::OK,
@@ -321,7 +366,8 @@ pub async fn toggle_pos(
                 message: format!("Fitur Kasir POS untuk {} kini: {}", u.nama, status_str),
                 data: Some(u.clone()),
             }),
-        ).into_response();
+        )
+            .into_response();
     }
 
     (
@@ -331,7 +377,8 @@ pub async fn toggle_pos(
             message: "Unit usaha tidak ditemukan atau Anda tidak memiliki hak akses.".to_string(),
             data: None,
         }),
-    ).into_response()
+    )
+        .into_response()
 }
 
 // 6. HAPUS UNIT USAHA (Dilindungi Validasi IDOR)
@@ -363,15 +410,19 @@ pub async fn delete_usaha(
                     message: format!("Unit usaha #{} berhasil dihapus permanen.", id),
                     data: None,
                 }),
-            ).into_response()
+            )
+                .into_response()
         }
         _ => (
             StatusCode::FORBIDDEN,
             Json(ApiResponse::<()> {
                 status: "error".to_string(),
-                message: "Gagal menghapus: Unit usaha tidak ditemukan atau Anda bukan pemilik unit ini.".to_string(),
+                message:
+                    "Gagal menghapus: Unit usaha tidak ditemukan atau Anda bukan pemilik unit ini."
+                        .to_string(),
                 data: None,
             }),
-        ).into_response(),
+        )
+            .into_response(),
     }
 }

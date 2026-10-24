@@ -1,12 +1,10 @@
+use crate::models::{
+    AuditLogModel, KaryawanAccount, OwnerAccount, PaketLangganan, PermintaanStokModel, ProdukModel,
+    ShiftKasirModel, StokOpnameModel, TransaksiModel, TransferStokModel, UsahaModel,
+};
+use sqlx::PgPool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use sqlx::PgPool;
-use crate::models::{
-    AuditLogModel, KaryawanAccount, OwnerAccount, PaketLangganan,
-    PermintaanStokModel, ProdukModel, ShiftKasirModel,
-    StokOpnameModel, TransferStokModel, TransaksiModel, UsahaModel,
-};
-use bcrypt::hash;
 
 pub struct AppState {
     pub db: PgPool,
@@ -25,40 +23,15 @@ pub struct AppState {
 
 impl AppState {
     pub async fn new(pool: PgPool) -> Self {
-        let password_demo = hash("123456", 4).unwrap_or_default();
+        // Jangan membuat akun demo/backdoor otomatis di lingkungan mana pun.
+        // Akun owner harus dibuat melalui proses registrasi yang tersimpan di DB.
 
         // 1. Tambahkan kolom owner_id pada tabel users jika belum ada (multi-tenant support)
         let _ = sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_id INT REFERENCES users(id) ON DELETE CASCADE")
             .execute(&pool)
             .await;
 
-        // 1b. Sinkronisasi atau Buat Akun Owner Awal di PostgreSQL
-        let owner_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users WHERE role = 'owner'")
-            .fetch_one(&pool)
-            .await
-            .unwrap_or((0,));
-
-        if owner_count.0 == 0 {
-            let _ = sqlx::query(
-                "INSERT INTO users (nama, email, password_hash, role, aktif, nama_perusahaan, tier, kuota_unit_usaha, sisa_kuota_ai, is_2fa_active, secret_2fa)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"
-            )
-            .bind("Budi Santoso")
-            .bind("owner@multi-usaha.com")
-            .bind(&password_demo)
-            .bind("owner")
-            .bind(true)
-            .bind("Aneka Makmur Group")
-            .bind("pro")
-            .bind(5)
-            .bind(250)
-            .bind(true)
-            .bind("123456")
-            .execute(&pool)
-            .await;
-        }
-
-        // 2. Baca seluruh data nyata yang tersimpan di PostgreSQL ke cache RAM
+        // Baca seluruh data nyata yang tersimpan di PostgreSQL ke cache RAM.
         #[derive(sqlx::FromRow)]
         struct UserRow {
             id: i32,
@@ -91,7 +64,9 @@ impl AppState {
                     nama: u.nama,
                     email: u.email,
                     password_hash: u.password_hash,
-                    nama_bisnis_induk: u.nama_perusahaan.unwrap_or_else(|| "Grup Bisnis".to_string()),
+                    nama_bisnis_induk: u
+                        .nama_perusahaan
+                        .unwrap_or_else(|| "Grup Bisnis".to_string()),
                     paket_langganan: match u.tier.as_deref() {
                         Some("enterprise") => PaketLangganan::Enterprise,
                         Some("pro") => PaketLangganan::Pro,
@@ -111,13 +86,17 @@ impl AppState {
                 };
 
                 // Ambil unit yang diakses karyawan
-                let unit_ids: Vec<i64> = sqlx::query_scalar("SELECT unit_id FROM user_units WHERE user_id = $1")
-                    .bind(u.id)
-                    .fetch_all(&pool)
-                    .await
-                    .unwrap_or_default();
+                let unit_ids: Vec<i64> =
+                    sqlx::query_scalar("SELECT unit_id FROM user_units WHERE user_id = $1")
+                        .bind(u.id)
+                        .fetch_all(&pool)
+                        .await
+                        .unwrap_or_default();
 
-                let k_owner_id = u.owner_id.map(|oid| oid as i64).unwrap_or(1);
+                let Some(k_owner_id) = u.owner_id.map(|oid| oid as i64) else {
+                    // Data legacy tanpa owner tidak boleh diberi tenant default.
+                    continue;
+                };
 
                 karyawans.push(KaryawanAccount {
                     id: u.id as i64,
@@ -158,7 +137,7 @@ impl AppState {
         }
 
         let jwt_secret = std::env::var("JWT_SECRET")
-            .unwrap_or_else(|_| "secret-multi-usaha-key-2026".to_string());
+            .expect("JWT_SECRET wajib diatur dan tidak boleh memakai secret default");
 
         Self {
             db: pool,

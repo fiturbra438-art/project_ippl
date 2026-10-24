@@ -1,5 +1,7 @@
+use crate::models::{
+    JenisTransaksi, PaketLangganan, PeranPengguna, StatusPermintaanStok, StatusTransfer,
+};
 use serde::{Deserialize, Serialize};
-use crate::models::{JenisTransaksi, PaketLangganan, PeranPengguna, StatusPermintaanStok, StatusTransfer};
 
 // ==================== OWNER AUTH SCHEMAS ====================
 
@@ -20,6 +22,7 @@ pub struct LoginOwnerRequest {
 #[derive(Debug, Deserialize)]
 pub struct Verify2FARequest {
     pub email: String,
+    pub password: String,
     pub code_otp: String,
 }
 
