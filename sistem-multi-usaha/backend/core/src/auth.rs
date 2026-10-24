@@ -118,7 +118,7 @@ pub async fn register_owner(
     if payload.password.len() < 10 {
         return (
             StatusCode::BAD_REQUEST,
-            Json(ApiResponse::<OwnerAuthResponse> {
+            Json(ApiResponse::<serde_json::Value> {
                 status: "error".to_string(),
                 message: "Kata sandi minimal 10 karakter.".to_string(),
                 data: None,
@@ -131,7 +131,7 @@ pub async fn register_owner(
         Err(_) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<OwnerAuthResponse> {
+                Json(ApiResponse::<serde_json::Value> {
                     status: "error".to_string(),
                     message: "Gagal mengenkripsi kata sandi.".to_string(),
                     data: None,
@@ -140,15 +140,21 @@ pub async fn register_owner(
         }
     };
 
+    // Buat 6 digit kode OTP dinamis untuk verifikasi email saat pendaftaran
+    let otp_code = crate::email::generate_dynamic_otp();
+    let expires_at = Utc::now() + Duration::minutes(5);
+
     let new_owner_row: Result<(i32,), sqlx::Error> = sqlx::query_as(
-        "INSERT INTO users (nama, email, password_hash, role, aktif, nama_perusahaan, tier, kuota_unit_usaha, sisa_kuota_ai, is_2fa_active)
-         VALUES ($1, LOWER($2), $3, 'owner', true, $4, 'free', 2, 20, false)
+        "INSERT INTO users (nama, email, password_hash, role, aktif, nama_perusahaan, tier, kuota_unit_usaha, sisa_kuota_ai, is_2fa_active, otp_code, otp_expires_at)
+         VALUES ($1, LOWER($2), $3, 'owner', true, $4, 'free', 2, 20, true, $5, $6)
          RETURNING id"
     )
     .bind(&payload.nama)
     .bind(&payload.email)
     .bind(&password_hash)
     .bind(&payload.nama_bisnis_induk)
+    .bind(&otp_code)
+    .bind(expires_at.naive_utc())
     .fetch_one(&state.db)
     .await;
 
@@ -157,7 +163,7 @@ pub async fn register_owner(
         Err(_) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ApiResponse::<OwnerAuthResponse> {
+                Json(ApiResponse::<serde_json::Value> {
                     status: "error".to_string(),
                     message: "Email sudah terdaftar atau registrasi gagal.".to_string(),
                     data: None,
@@ -168,57 +174,38 @@ pub async fn register_owner(
 
     let new_owner = OwnerAccount {
         id: new_id,
-        nama: payload.nama,
+        nama: payload.nama.clone(),
         email: payload.email.to_lowercase(),
         password_hash,
         nama_bisnis_induk: payload.nama_bisnis_induk,
         paket_langganan: PaketLangganan::Free, // Default paket gratis
         kuota_unit_usaha: 2,                   // Free tier = 2 unit
         sisa_kuota_ai: 20,                     // 20 kredit AI awal
-        is_2fa_active: false,
+        is_2fa_active: true,
         secret_2fa: None,
-    };
-
-    let token = match generate_token(
-        &new_owner.email,
-        new_owner.id,
-        "owner",
-        new_owner.id,
-        Some("free".to_string()),
-        &state.jwt_secret,
-    ) {
-        Ok(t) => t,
-        Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::<OwnerAuthResponse> {
-                    status: "error".to_string(),
-                    message: "Gagal membuat sesi login.".to_string(),
-                    data: None,
-                }),
-            );
-        }
-    };
-
-    let res = OwnerAuthResponse {
-        token,
-        owner_id: new_owner.id,
-        nama: new_owner.nama.clone(),
-        email: new_owner.email.clone(),
-        nama_bisnis: new_owner.nama_bisnis_induk.clone(),
-        paket: new_owner.paket_langganan.clone(),
-        kuota_unit_usaha: new_owner.kuota_unit_usaha,
-        sisa_kuota_ai: new_owner.sisa_kuota_ai,
     };
 
     state.owners.write().await.push(new_owner);
 
+    // Kirim kode OTP pendaftaran langsung ke email
+    let email_owner = payload.email.clone();
+    let nama_owner = payload.nama.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::email::send_otp_email(&email_owner, &nama_owner, &otp_code).await {
+            tracing::error!("❌ Gagal mengirimkan email OTP registrasi ke {}: {}", email_owner, e);
+        }
+    });
+
     (
         StatusCode::CREATED,
         Json(ApiResponse {
-            status: "success".to_string(),
-            message: "Registrasi akun Owner berhasil.".to_string(),
-            data: Some(res),
+            status: "require_2fa".to_string(),
+            message: "Registrasi akun berhasil! Kode OTP verifikasi telah dikirimkan ke email Anda.".to_string(),
+            data: Some(serde_json::json!({
+                "owner_id": new_id,
+                "email": payload.email,
+                "is_2fa": true,
+            })),
         }),
     )
 }
@@ -264,11 +251,36 @@ pub async fn login_owner(
 
     let is_2fa = owner.5.unwrap_or(true);
     if is_2fa {
+        // Buat 6 angka OTP acak dinamis
+        let otp_code = crate::email::generate_dynamic_otp();
+        let expires_at = Utc::now() + Duration::minutes(5);
+
+        // Simpan OTP dan masa kedaluwarsa ke database PostgreSQL
+        let _ = sqlx::query(
+            "UPDATE users 
+             SET otp_code = $1, otp_expires_at = $2 
+             WHERE id = $3"
+        )
+        .bind(&otp_code)
+        .bind(expires_at.naive_utc())
+        .bind(owner.0)
+        .execute(&state.db)
+        .await;
+
+        // Kirimkan OTP ke email Owner secara asynchronous
+        let email_owner = owner.2.clone();
+        let nama_owner = owner.1.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::email::send_otp_email(&email_owner, &nama_owner, &otp_code).await {
+                tracing::error!("❌ Gagal mengirimkan email OTP ke {}: {}", email_owner, e);
+            }
+        });
+
         return (
             StatusCode::OK,
             Json(ApiResponse {
                 status: "require_2fa".to_string(),
-                message: "Verifikasi 2FA diperlukan. Masukkan kode OTP.".to_string(),
+                message: "Verifikasi 2FA diperlukan. Kode OTP telah dikirimkan ke email Anda dan berlaku 5 menit.".to_string(),
                 data: Some(serde_json::json!({
                     "owner_id": owner.0,
                     "email": owner.2,
@@ -363,33 +375,63 @@ pub async fn verify_owner_2fa(
         );
     }
 
-    let secret_db = match owner.5.as_ref() {
-        Some(secret) if !secret.trim().is_empty() => secret,
+    // Ambil data OTP dinamis dan masa kedaluwarsa dari PostgreSQL
+    let otp_row = sqlx::query_as::<_, (Option<String>, Option<chrono::NaiveDateTime>)>(
+        "SELECT otp_code, otp_expires_at FROM users WHERE id = $1"
+    )
+    .bind(owner.0)
+    .fetch_optional(&state.db)
+    .await
+    .unwrap_or(None);
+
+    let (db_otp, db_expires) = match otp_row {
+        Some((Some(code), Some(exp))) => (code, exp),
         _ => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(ApiResponse::<OwnerAuthResponse> {
-                    status: "error".to_string(),
-                    message: "2FA belum dikonfigurasi untuk akun ini.".to_string(),
-                    data: None,
-                }),
-            );
+            // Fallback ke secret_2fa statis jika ada (misal setup awal)
+            if let Some(sec) = owner.5.as_ref() {
+                (sec.clone(), Utc::now().naive_utc() + chrono::Duration::hours(24))
+            } else {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(ApiResponse::<OwnerAuthResponse> {
+                        status: "error".to_string(),
+                        message: "Tidak ada kode OTP aktif. Silakan login ulang untuk mendapatkan kode OTP baru.".to_string(),
+                        data: None,
+                    }),
+                );
+            }
         }
     };
 
-    // Validasi OTP terhadap secret database (Mencegah sembarang OTP < 4 karakter lolos)
-    if payload.code_otp.trim() != secret_db.trim() {
+    // Validasi kedaluwarsa OTP (5 menit)
+    if Utc::now().naive_utc() > db_expires {
         return (
             StatusCode::UNAUTHORIZED,
             Json(ApiResponse::<OwnerAuthResponse> {
                 status: "error".to_string(),
-                message:
-                    "Kode 2FA OTP tidak cocok. Silakan periksa kembali aplikasi autentikator Anda."
-                        .to_string(),
+                message: "Kode OTP telah kedaluwarsa. Silakan login ulang untuk meminta kode OTP baru.".to_string(),
                 data: None,
             }),
         );
     }
+
+    // Validasi kecocokan kode OTP
+    if payload.code_otp.trim() != db_otp.trim() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::<OwnerAuthResponse> {
+                status: "error".to_string(),
+                message: "Kode OTP tidak cocok. Silakan periksa kembali email Anda.".to_string(),
+                data: None,
+            }),
+        );
+    }
+
+    // Hanguskan OTP setelah berhasil dipakai (mencegah replay attack)
+    let _ = sqlx::query("UPDATE users SET otp_code = NULL, otp_expires_at = NULL WHERE id = $1")
+        .bind(owner.0)
+        .execute(&state.db)
+        .await;
 
     let paket_str = owner.4.clone().unwrap_or_else(|| "pro".to_string());
     let token = generate_token(

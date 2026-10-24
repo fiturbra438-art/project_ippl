@@ -1,6 +1,7 @@
 mod ai;
 mod auth;
 mod dashboard;
+mod email;
 mod gudang;
 mod karyawan;
 mod models;

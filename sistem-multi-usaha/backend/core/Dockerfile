@@ -1,5 +1,5 @@
 # Multi-stage Dockerfile for Rust Core Backend
-FROM rust:1.80-slim as builder
+FROM rust:latest AS builder
 WORKDIR /usr/src/app
 
 # Install build dependencies
@@ -8,12 +8,12 @@ RUN apt-get update && apt-get install -y pkg-config libssl-dev && rm -rf /var/li
 COPY Cargo.toml Cargo.lock ./
 # Create dummy main to cache dependencies
 RUN mkdir src && echo "fn main() {}" > src/main.rs
-RUN cargo build --release
+RUN cargo build --release --locked
 RUN rm -rf src
 
 # Copy real source code
 COPY src ./src
-RUN touch src/main.rs && cargo build --release
+RUN touch src/main.rs && cargo build --release --locked
 
 # Runtime image (super small & lightweight)
 FROM debian:bookworm-slim

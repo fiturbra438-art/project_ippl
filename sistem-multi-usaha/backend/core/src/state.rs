@@ -31,6 +31,14 @@ impl AppState {
             .execute(&pool)
             .await;
 
+        // 1b. Tambahkan kolom dynamic OTP dan masa kedaluwarsa pada tabel users
+        let _ = sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_code VARCHAR(10)")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_expires_at TIMESTAMP")
+            .execute(&pool)
+            .await;
+
         // Baca seluruh data nyata yang tersimpan di PostgreSQL ke cache RAM.
         #[derive(sqlx::FromRow)]
         struct UserRow {

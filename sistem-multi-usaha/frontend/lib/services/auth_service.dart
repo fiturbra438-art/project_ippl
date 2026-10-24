@@ -10,9 +10,10 @@ class AuthService {
   }
 
   // Verifikasi 2FA Owner -> Menerima JWT Token
-  static Future<Map<String, dynamic>?> verify2FA(String email, String codeOtp) async {
+  static Future<Map<String, dynamic>?> verify2FA(String email, String password, String codeOtp) async {
     final res = await ApiService.post('/auth/owner/verify-2fa', {
       'email': email,
+      'password': password,
       'code_otp': codeOtp,
     });
     if (res != null && res['status'] == 'success' && res['data'] != null) {

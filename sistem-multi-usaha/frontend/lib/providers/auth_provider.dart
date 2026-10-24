@@ -1,34 +1,18 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import '../models/user_model.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 
 class AuthProvider extends ChangeNotifier {
-  UserModel? _currentUser = UserModel(
-    id: 1,
-    nama: 'Budi Santoso',
-    email: 'owner@multi-usaha.com',
-    role: UserRole.owner,
-    unitAksesIds: [], // semua unit
-    isAktif: true,
-    is2FAAktif: true,
-  );
+  UserModel? _currentUser;
 
   int? _selectedUnitId; // null = semua unit (konsolidasi owner)
   bool _isAwaiting2FA = false;
   String _tempEmail = '';
+  String _tempPassword = '';
 
   // Daftar pengguna yang disinkronkan dengan backend
-  List<UserModel> _penggunaList = [
-    UserModel(
-      id: 1,
-      nama: 'Budi Santoso (Owner)',
-      email: 'owner@multi-usaha.com',
-      role: UserRole.owner,
-      unitAksesIds: [],
-      is2FAAktif: true,
-    ),
-  ];
+  List<UserModel> _penggunaList = [];
 
   final List<AuditLogModel> _auditLogs = [];
 
@@ -55,21 +39,6 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void switchRoleForPreview(UserRole role) {
-    if (_currentUser != null) {
-      _currentUser = UserModel(
-        id: _currentUser!.id,
-        nama: _currentUser!.nama,
-        email: _currentUser!.email,
-        role: role,
-        unitAksesIds: role == UserRole.kasir || role == UserRole.manager ? [1] : [],
-        isAktif: true,
-        is2FAAktif: _currentUser!.is2FAAktif,
-      );
-      notifyListeners();
-    }
-  }
-
   Future<bool> initiateLogin(String email, String password) async {
     // 1. Coba login via backend Rust API
     try {
@@ -77,6 +46,7 @@ class AuthProvider extends ChangeNotifier {
       if (resOwner != null) {
         if (resOwner['status'] == 'require_2fa') {
           _tempEmail = email;
+          _tempPassword = password;
           _isAwaiting2FA = true;
           notifyListeners();
           return true;
@@ -102,6 +72,13 @@ class AuthProvider extends ChangeNotifier {
         final data = resKaryawan['data'];
         final peranStr = data['peran'] as String? ?? 'kasir';
         final roleEnum = matchRoleFromString(peranStr);
+
+        // Platform Guard: Pada Web, batasi hanya untuk Owner & Manager
+        if (kIsWeb && roleEnum != UserRole.manager && roleEnum != UserRole.owner) {
+          ApiService.authToken = null;
+          return false;
+        }
+
         final unitIds = (data['unit_akses_ids'] as List?)?.map((e) => (e as num).toInt()).toList() ?? [];
 
         _currentUser = UserModel(
@@ -116,27 +93,10 @@ class AuthProvider extends ChangeNotifier {
         notifyListeners();
         return true;
       }
-    } catch (_) {}
-
-    // Fallback lokal jika backend tidak terjangkau
-    if (email.isNotEmpty && password.length >= 6) {
-      _tempEmail = email;
-      if (email.contains('owner')) {
-        _isAwaiting2FA = true;
-        notifyListeners();
-        return true;
-      }
-      _currentUser = UserModel(
-        id: 2,
-        nama: email.split('@').first.toUpperCase(),
-        email: email,
-        role: UserRole.kasir,
-        unitAksesIds: [1],
-      );
-      _isAwaiting2FA = false;
-      notifyListeners();
-      return true;
+    } catch (_) {
+      return false;
     }
+
     return false;
   }
 
@@ -155,7 +115,7 @@ class AuthProvider extends ChangeNotifier {
 
   Future<bool> verify2FACode(String code) async {
     try {
-      final res = await AuthService.verify2FA(_tempEmail, code);
+      final res = await AuthService.verify2FA(_tempEmail, _tempPassword, code);
       if (res != null && res['status'] == 'success') {
         final data = res['data'];
         _currentUser = UserModel(
@@ -173,20 +133,6 @@ class AuthProvider extends ChangeNotifier {
       }
     } catch (_) {}
 
-    if (code.trim() == '123456') {
-      _currentUser = UserModel(
-        id: 1,
-        nama: _tempEmail.split('@').first.toUpperCase(),
-        email: _tempEmail,
-        role: UserRole.owner,
-        unitAksesIds: [],
-        is2FAAktif: true,
-      );
-      _isAwaiting2FA = false;
-      addAuditLog('LOGIN_2FA', 'AUTH', _tempEmail, 'Login berhasil dengan verifikasi 2FA');
-      notifyListeners();
-      return true;
-    }
     return false;
   }
 
@@ -203,33 +149,32 @@ class AuthProvider extends ChangeNotifier {
         password: password,
         namaBisnisInduk: namaUsahaUtama,
       );
-      if (res != null && res['status'] == 'success') {
-        final data = res['data'];
-        _currentUser = UserModel(
-          id: (data['owner_id'] as num?)?.toInt() ?? 1,
-          nama: nama,
-          email: email,
-          role: UserRole.owner,
-          unitAksesIds: [],
-          is2FAAktif: true,
-        );
-        addAuditLog('REGISTER_OWNER', 'AUTH', email, 'Registrasi akun Owner baru: $namaUsahaUtama');
-        notifyListeners();
-        return true;
+      if (res != null) {
+        if (res['status'] == 'require_2fa') {
+          _tempEmail = email;
+          _tempPassword = password;
+          _isAwaiting2FA = true;
+          addAuditLog('REGISTER_OWNER', 'AUTH', email, 'Registrasi akun Owner berhasil. Menunggu verifikasi OTP.');
+          notifyListeners();
+          return true;
+        } else if (res['status'] == 'success') {
+          final data = res['data'];
+          _currentUser = UserModel(
+            id: (data['owner_id'] as num?)?.toInt() ?? 1,
+            nama: nama,
+            email: email,
+            role: UserRole.owner,
+            unitAksesIds: [],
+            is2FAAktif: true,
+          );
+          addAuditLog('REGISTER_OWNER', 'AUTH', email, 'Registrasi akun Owner baru: $namaUsahaUtama');
+          notifyListeners();
+          return true;
+        }
       }
     } catch (_) {}
 
-    _currentUser = UserModel(
-      id: DateTime.now().millisecondsSinceEpoch,
-      nama: nama,
-      email: email,
-      role: UserRole.owner,
-      unitAksesIds: [],
-      is2FAAktif: true,
-    );
-    addAuditLog('REGISTER_OWNER', 'AUTH', email, 'Registrasi akun Owner baru: $namaUsahaUtama');
-    notifyListeners();
-    return true;
+    return false;
   }
 
   // Daftarkan karyawan dengan password ke PostgreSQL backend

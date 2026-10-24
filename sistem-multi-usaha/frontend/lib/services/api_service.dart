@@ -1,16 +1,22 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 class ApiService {
-  // Karena Flutter Web dilayani langsung oleh server Rust di port 8000,
-  // baseUrl bisa menggunakan origin yang sama secara dinamis.
-  static const String baseUrl = 'http://127.0.0.1:8000/api';
+  // Dapat dikonfigurasi saat build menggunakan:
+  // flutter build apk --dart-define=BACKEND_URL=http://192.168.1.xx:8000/api
+  // Default fallback: http://127.0.0.1:8000/api (untuk Desktop / Local)
+  static const String baseUrl = String.fromEnvironment(
+    'BACKEND_URL',
+    defaultValue: 'http://127.0.0.1:8000/api',
+  );
   static String? authToken;
 
   static Map<String, String> get headers {
     final map = <String, String>{
       'Content-Type': 'application/json',
       'Accept': 'application/json',
+      'X-Client-Platform': kIsWeb ? 'web' : 'app',
     };
     if (authToken != null && authToken!.isNotEmpty) {
       map['Authorization'] = 'Bearer $authToken';

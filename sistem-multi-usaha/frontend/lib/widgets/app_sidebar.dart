@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../models/user_model.dart';
@@ -82,13 +83,20 @@ class AppSidebar extends StatelessWidget {
                       _navigateWithoutAnimation(context, const UsahaScreen());
                     }
                   }),
-                if (role == UserRole.owner || role == UserRole.kasir)
+                // Kasir (POS) diutamakan di aplikasi native desktop/mobile, pada web hanya ditampilkan jika owner
+                if (!kIsWeb && (role == UserRole.owner || role == UserRole.kasir))
                   _buildItem(context, 'Kasir (POS)', Icons.point_of_sale_rounded, activeRoute == 'pos', () {
                     if (activeRoute != 'pos') {
                       _navigateWithoutAnimation(context, const PosScreen());
                     }
+                  })
+                else if (kIsWeb && role == UserRole.owner)
+                  _buildItem(context, 'Monitor POS', Icons.point_of_sale_rounded, activeRoute == 'pos', () {
+                    if (activeRoute != 'pos') {
+                      _navigateWithoutAnimation(context, const PosScreen());
+                    }
                   }),
-                if (role == UserRole.owner || role == UserRole.adminGudang)
+                if (role == UserRole.owner || role == UserRole.adminGudang || role == UserRole.manager)
                   _buildItem(context, 'Gudang & Transfer', Icons.warehouse_rounded, activeRoute == 'gudang', () {
                     if (activeRoute != 'gudang') {
                       _navigateWithoutAnimation(context, const GudangScreen());

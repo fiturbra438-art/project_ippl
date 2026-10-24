@@ -60,7 +60,6 @@ class DashboardScreen extends StatelessWidget {
                       ),
                   ],
                 ),
-                _buildRoleSwitcher(context),
               ],
             )
           : null,
@@ -146,11 +145,6 @@ class DashboardScreen extends StatelessWidget {
                 ),
               ),
             ),
-            if (isOwner) ...[
-              const SizedBox(width: 12),
-              // Switch Role (Hanya muncul untuk simulasi Owner)
-              _buildRoleSwitcher(context),
-            ],
             const SizedBox(width: 12),
             Stack(
               alignment: Alignment.topRight,
@@ -171,26 +165,6 @@ class DashboardScreen extends StatelessWidget {
           ],
         ),
       ],
-    );
-  }
-
-  Widget _buildRoleSwitcher(BuildContext context) {
-    final auth = context.watch<AuthProvider>();
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: BoxDecoration(color: AppTheme.lightBlueBg, borderRadius: BorderRadius.circular(10)),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<UserRole>(
-          value: auth.currentUser?.role ?? UserRole.owner,
-          items: UserRole.values.map((r) {
-            return DropdownMenuItem(value: r, child: Text('Peran: ${r.label}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryBlue)));
-          }).toList(),
-          onChanged: (role) {
-            if (role != null) auth.switchRoleForPreview(role);
-          },
-        ),
-      ),
     );
   }
 

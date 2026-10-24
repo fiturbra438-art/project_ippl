@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
@@ -15,10 +16,10 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   bool _isRegisterMode = false;
-  final _emailCtrl = TextEditingController(text: 'owner@multi-usaha.com');
-  final _passwordCtrl = TextEditingController(text: '123456');
-  final _namaCtrl = TextEditingController(text: 'Budi Santoso');
-  final _usahaCtrl = TextEditingController(text: 'Kopi & Retail Group');
+  final _emailCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
+  final _namaCtrl = TextEditingController();
+  final _usahaCtrl = TextEditingController();
   final _otpCtrl = TextEditingController();
 
   bool _isLoading = false;
@@ -46,10 +47,10 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     if (_isRegisterMode) {
-      if (_namaCtrl.text.isEmpty || _emailCtrl.text.isEmpty || _passwordCtrl.text.length < 6) {
+      if (_namaCtrl.text.isEmpty || _emailCtrl.text.isEmpty || _passwordCtrl.text.length < 10) {
         setState(() {
           _isLoading = false;
-          _errorMessage = 'Lengkapi seluruh data dan password minimal 6 karakter.';
+          _errorMessage = 'Lengkapi seluruh data dan password minimal 10 karakter.';
         });
         return;
       }
@@ -62,7 +63,11 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted) {
         setState(() => _isLoading = false);
         if (ok) {
-          AppNavigator.pushReplacementFullscreen(context, const DashboardScreen());
+          if (!auth.isAwaiting2FA) {
+            AppNavigator.pushReplacementFullscreen(context, const DashboardScreen());
+          }
+        } else {
+          setState(() => _errorMessage = 'Registrasi gagal. Email mungkin sudah digunakan.');
         }
       }
     } else {
@@ -74,7 +79,11 @@ class _LoginScreenState extends State<LoginScreen> {
             AppNavigator.pushReplacementFullscreen(context, const DashboardScreen());
           }
         } else {
-          setState(() => _errorMessage = 'Email atau password salah (minimal 6 karakter).');
+          setState(() {
+            _errorMessage = kIsWeb
+                ? 'Gagal masuk. Portal Web khusus untuk Owner & Manajer. Pastikan email & password benar.'
+                : 'Email atau password salah (minimal 6 karakter).';
+          });
         }
       }
     }
@@ -146,7 +155,9 @@ class _LoginScreenState extends State<LoginScreen> {
                           ? 'Masukkan 6-digit kode verifikasi keamanan akun Owner'
                           : (_isRegisterMode
                               ? 'Buat akun pemilik bisnis multi-cabang'
-                              : 'Sistem Manajemen Multi-Usaha Terintegrasi AI'),
+                              : (kIsWeb
+                                  ? 'Portal Web Manajemen (Owner & Manajer)'
+                                  : 'Sistem Terpadu Multi-Usaha & POS')),
                       textAlign: TextAlign.center,
                       style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary),
                     ),
@@ -191,8 +202,8 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                     const SizedBox(height: 8),
                     const Text(
-                      'Tip demo: Masukkan sembarang 6 angka (misal: 123456)',
-                      style: TextStyle(fontSize: 11, color: AppTheme.textMuted),
+                      'Periksa kotak masuk (atau folder spam) email Anda untuk melihat 6-digit kode OTP.',
+                      style: TextStyle(fontSize: 11, color: AppTheme.textSecondary),
                     ),
                   ] else ...[
                     if (_isRegisterMode) ...[
