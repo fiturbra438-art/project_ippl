@@ -22,6 +22,7 @@ import 'ai_hub_screen.dart';
 import 'chat_ai_screen.dart';
 import 'user_management_screen.dart';
 import 'notifikasi_screen.dart';
+import 'manager_dashboard_screen.dart';
 import 'login_screen.dart';
 
 class DashboardScreen extends StatelessWidget {
@@ -29,8 +30,25 @@ class DashboardScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isMobile = ResponsiveLayout.isMobile(context);
     final auth = context.watch<AuthProvider>();
+
+    // 1. Guard Autentikasi: Jika belum login, arahkan ke LoginScreen
+    if (!auth.isAuthenticated) {
+      return const LoginScreen();
+    }
+
+    // 2. Guard Peran (Role Isolation): Jika manajer, kasir, atau admin gudang mencoba membuka DashboardScreen,
+    // langsung alihkan ke layar operasional yang sesuai secara otomatis.
+    final role = auth.currentUser?.role ?? UserRole.owner;
+    if (role == UserRole.manager) {
+      return const ManagerDashboardScreen();
+    } else if (role == UserRole.kasir) {
+      return const PosScreen();
+    } else if (role == UserRole.adminGudang) {
+      return const GudangScreen();
+    }
+
+    final isMobile = ResponsiveLayout.isMobile(context);
     final notif = context.watch<NotifikasiProvider>();
 
     return Scaffold(

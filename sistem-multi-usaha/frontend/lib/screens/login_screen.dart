@@ -41,8 +41,6 @@ class _LoginScreenState extends State<LoginScreen> {
       case UserRole.adminGudang:
         AppNavigator.pushReplacementFullscreen(context, const GudangScreen());
         break;
-      case UserRole.owner:
-      case UserRole.auditor:
       default:
         AppNavigator.pushReplacementFullscreen(context, const DashboardScreen());
         break;

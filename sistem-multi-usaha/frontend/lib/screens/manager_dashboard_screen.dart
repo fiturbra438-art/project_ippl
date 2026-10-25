@@ -493,7 +493,7 @@ class _ManagerDashboardScreenState extends State<ManagerDashboardScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(t.keterangan.isNotEmpty ? t.keterangan : 'Transaksi #${t.id}', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                        Text('${t.tanggal} • ${t.metodePembayaran ?? "Tunai"}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                        Text('${DateFormat('dd/MM/yyyy HH:mm').format(t.tanggal)} • ${t.kategori}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
                       ],
                     ),
                     Text(currency.format(t.jumlah), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.accentGreen)),

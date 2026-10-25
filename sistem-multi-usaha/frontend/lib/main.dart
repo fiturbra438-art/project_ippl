@@ -15,6 +15,8 @@ import 'providers/permintaan_stok_provider.dart';
 import 'providers/ai_suite_provider.dart';
 import 'providers/notifikasi_provider.dart';
 
+import 'models/user_model.dart';
+import 'screens/manager_dashboard_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/produk_screen.dart';
@@ -61,7 +63,7 @@ class MultiUsahaApp extends StatelessWidget {
       title: 'MultiUsaha - Sistem Manajemen Portofolio Bisnis Terintegrasi AI',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
-      home: const DashboardScreen(),
+      home: const _AppEntryWrapper(),
       routes: {
         '/login': (_) => const LoginScreen(),
         '/pos': (_) => const PosScreen(),
@@ -75,5 +77,30 @@ class MultiUsahaApp extends StatelessWidget {
         '/notifikasi': (_) => const NotifikasiScreen(),
       },
     );
+  }
+}
+
+class _AppEntryWrapper extends StatelessWidget {
+  const _AppEntryWrapper();
+
+  @override
+  Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
+
+    if (!auth.isAuthenticated) {
+      return const LoginScreen();
+    }
+
+    final role = auth.currentUser?.role ?? UserRole.owner;
+    switch (role) {
+      case UserRole.manager:
+        return const ManagerDashboardScreen();
+      case UserRole.kasir:
+        return const PosScreen();
+      case UserRole.adminGudang:
+        return const GudangScreen();
+      default:
+        return const DashboardScreen();
+    }
   }
 }
