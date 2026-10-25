@@ -21,17 +21,54 @@ pub struct TransaksiQuery {
     pub jenis: Option<String>,
 }
 
-// 1. STATUS SHIFT KASIR AKTIF
+// 1. STATUS SHIFT KASIR AKTIF (Membaca langsung dari tabel PostgreSQL cashier_shifts)
 pub async fn get_shift_status(
     State(state): State<Arc<AppState>>,
     Path(unit_id): Path<i64>,
 ) -> impl IntoResponse {
-    let shifts = state.shifts.read().await;
+    use rust_decimal::prelude::ToPrimitive;
 
-    let active_shift = shifts
-        .iter()
-        .find(|s| s.unit_id == unit_id && s.status == StatusShift::Open)
-        .cloned();
+    let shift_row = sqlx::query_as::<
+        _,
+        (
+            i32,
+            i32,
+            i32,
+            String,
+            rust_decimal::Decimal,
+            rust_decimal::Decimal,
+            rust_decimal::Decimal,
+            i32,
+            chrono::NaiveDateTime,
+            Option<chrono::NaiveDateTime>,
+            String,
+        ),
+    >(
+        "SELECT id, unit_id, kasir_id, nama_kasir, modal_awal, total_penjualan_tunai, total_penjualan_non_tunai, total_transaksi, waktu_buka, waktu_tutup, status
+         FROM cashier_shifts
+         WHERE unit_id = $1 AND status = 'open'
+         ORDER BY id DESC LIMIT 1",
+    )
+    .bind(unit_id as i32)
+    .fetch_optional(&state.db)
+    .await;
+
+    let active_shift = match shift_row {
+        Ok(Some(r)) => Some(ShiftKasirModel {
+            id: r.0 as i64,
+            unit_id: r.1 as i64,
+            kasir_id: r.2 as i64,
+            nama_kasir: r.3,
+            modal_awal: r.4.to_f64().unwrap_or(0.0),
+            total_penjualan_tunai: r.5.to_f64().unwrap_or(0.0),
+            total_penjualan_non_tunai: r.6.to_f64().unwrap_or(0.0),
+            total_transaksi: r.7,
+            waktu_buka: r.8.format("%Y-%m-%d %H:%M").to_string(),
+            waktu_tutup: r.9.map(|t| t.format("%Y-%m-%d %H:%M").to_string()),
+            status: StatusShift::Open,
+        }),
+        _ => None,
+    };
 
     (
         StatusCode::OK,
@@ -409,7 +446,7 @@ pub async fn checkout_pos(
     }
 }
 
-// 5. RIWAYAT TRANSAKSI (Filter unit_id & jenis)
+// 5. RIWAYAT TRANSAKSI (Membaca langsung dari PostgreSQL transactions & business_units)
 pub async fn list_transaksi(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -421,32 +458,110 @@ pub async fn list_transaksi(
     };
     let owner_id = claims.owner_id;
 
-    let transaksis = state.transaksis.read().await;
+    // Ambil data transaksi langsung dari PostgreSQL
+    let rows = if let Some(uid) = query.unit_id {
+        sqlx::query_as::<
+            _,
+            (
+                i32,
+                i32,
+                i32,
+                String,
+                chrono::NaiveDateTime,
+                rust_decimal::Decimal,
+                String,
+                String,
+            ),
+        >(
+            "SELECT t.id, u.owner_id, t.unit_id, u.nama AS nama_unit, t.tanggal, t.total, t.metode_bayar, t.status
+             FROM transactions t
+             JOIN business_units u ON u.id = t.unit_id
+             WHERE u.owner_id = $1 AND t.unit_id = $2
+             ORDER BY t.id DESC",
+        )
+        .bind(owner_id as i32)
+        .bind(uid as i32)
+        .fetch_all(&state.db)
+        .await
+    } else {
+        sqlx::query_as::<
+            _,
+            (
+                i32,
+                i32,
+                i32,
+                String,
+                chrono::NaiveDateTime,
+                rust_decimal::Decimal,
+                String,
+                String,
+            ),
+        >(
+            "SELECT t.id, u.owner_id, t.unit_id, u.nama AS nama_unit, t.tanggal, t.total, t.metode_bayar, t.status
+             FROM transactions t
+             JOIN business_units u ON u.id = t.unit_id
+             WHERE u.owner_id = $1
+             ORDER BY t.id DESC",
+        )
+        .bind(owner_id as i32)
+        .fetch_all(&state.db)
+        .await
+    };
 
-    let hasil: Vec<TransaksiModel> = transaksis
-        .iter()
-        .filter(|t| {
-            if t.owner_id != owner_id {
-                return false;
-            }
+    use rust_decimal::prelude::ToPrimitive;
+    let mut hasil: Vec<TransaksiModel> = match rows {
+        Ok(list) => list
+            .into_iter()
+            .map(|r| {
+                let total_f64 = r.5.to_f64().unwrap_or(0.0);
+                TransaksiModel {
+                    id: r.0 as i64,
+                    owner_id: r.1 as i64,
+                    unit_id: r.2 as i64,
+                    nama_unit: r.3,
+                    tanggal: r.4.format("%Y-%m-%d %H:%M").to_string(),
+                    jenis: JenisTransaksi::Pemasukan,
+                    kategori: "Penjualan POS".to_string(),
+                    jumlah: total_f64,
+                    keterangan: format!("Transaksi Kasir #{} ({})", r.0, r.7),
+                    metode_pembayaran: Some(r.6),
+                    items: None,
+                }
+            })
+            .collect(),
+        Err(e) => {
+            tracing::error!("Gagal mengambil riwayat transaksi dari PostgreSQL: {}", e);
+            Vec::new()
+        }
+    };
+
+    // Gabungkan dengan transaksi manual di in-memory jika ada
+    let transaksis = state.transaksis.read().await;
+    for t in transaksis.iter() {
+        if t.owner_id == owner_id {
             if let Some(uid) = query.unit_id {
                 if uid > 0 && t.unit_id != uid {
-                    return false;
+                    continue;
                 }
             }
-            if let Some(j) = &query.jenis {
-                let j_lower = j.to_lowercase();
-                if j_lower == "pemasukan" && t.jenis != JenisTransaksi::Pemasukan {
-                    return false;
-                }
-                if j_lower == "pengeluaran" && t.jenis != JenisTransaksi::Pengeluaran {
-                    return false;
-                }
+            hasil.push(t.clone());
+        }
+    }
+    drop(transaksis);
+
+    // Filter berdasarkan query jenis jika ada
+    if let Some(j) = &query.jenis {
+        let j_lower = j.to_lowercase();
+        hasil.retain(|t| {
+            if j_lower == "pemasukan" && t.jenis != JenisTransaksi::Pemasukan {
+                return false;
+            }
+            if j_lower == "pengeluaran" && t.jenis != JenisTransaksi::Pengeluaran {
+                return false;
             }
             true
-        })
-        .cloned()
-        .collect();
+        });
+    }
 
     (
         StatusCode::OK,
@@ -518,7 +633,24 @@ pub async fn create_transaksi_manual(
     transaksis.push(new_trx.clone());
     drop(transaksis);
 
-    // Audit Log
+    // Audit Log permanen ke PostgreSQL
+    let _ = sqlx::query(
+        "INSERT INTO audit_logs (owner_id, aktor, role, aksi, modul, target, detail, waktu)
+         VALUES ($1, $2, $3, $4, 'Keuangan', $5, $6, now())",
+    )
+    .bind(owner_id as i32)
+    .bind(&aktor_nama)
+    .bind(&aktor_role)
+    .bind(format!("Catat Transaksi {:?}", payload.jenis))
+    .bind(&nama_unit)
+    .bind(format!(
+        "Transaksi #{:?} senilai Rp {:.0}",
+        new_id, payload.jumlah
+    ))
+    .execute(&state.db)
+    .await;
+
+    // Cache in-memory audit log
     let mut logs = state.audit_logs.write().await;
     let log_id = (logs.len() as i64) + 1;
     logs.push(AuditLogModel {

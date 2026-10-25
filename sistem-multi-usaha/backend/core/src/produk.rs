@@ -383,6 +383,14 @@ pub async fn update_produk(
     if let Some(stok) = payload.stok {
         let _ = sqlx::query("UPDATE inventories SET qty = $1 WHERE product_id = $2 AND unit_id IN (SELECT id FROM business_units WHERE owner_id = $3)").bind(stok).bind(id as i32).bind(claims.owner_id as i32).execute(&state.db).await;
     }
+    if let Some(min_s) = payload.min_stok {
+        let _ = sqlx::query("UPDATE inventories SET min_stock = $1 WHERE product_id = $2 AND unit_id IN (SELECT id FROM business_units WHERE owner_id = $3)")
+            .bind(min_s)
+            .bind(id as i32)
+            .bind(claims.owner_id as i32)
+            .execute(&state.db)
+            .await;
+    }
 
     (
         StatusCode::OK,

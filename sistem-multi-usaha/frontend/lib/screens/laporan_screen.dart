@@ -257,64 +257,6 @@ class LaporanScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildDesktopSidebar(BuildContext context) {
-    return Container(
-      width: 250,
-      decoration: const BoxDecoration(color: AppTheme.surfaceWhite, border: Border(right: BorderSide(color: AppTheme.cardBorder))),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 28),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Row(
-              children: const [
-                Icon(Icons.hub_rounded, color: AppTheme.primaryBlue, size: 28),
-                SizedBox(width: 12),
-                Text('MultiUsaha', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.primaryBlue)),
-              ],
-            ),
-          ),
-          const SizedBox(height: 36),
-          _buildSidebarItem(context, 'Dashboard', Icons.dashboard_rounded, false, () {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
-          }),
-          _buildSidebarItem(context, 'Unit Usaha', Icons.storefront_rounded, false, () {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const UsahaScreen()));
-          }),
-          _buildSidebarItem(context, 'Inventaris', Icons.inventory_2_rounded, false, () {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ProdukScreen()));
-          }),
-          _buildSidebarItem(context, 'Transaksi', Icons.receipt_long_rounded, false, () {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const TransaksiScreen()));
-          }),
-          _buildSidebarItem(context, 'Laporan Keuangan', Icons.assessment_rounded, true, () {}),
-          _buildSidebarItem(context, 'Portofolio BCG', Icons.pie_chart_rounded, false, () {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const PortofolioScreen()));
-          }),
-          _buildSidebarItem(context, 'Forecasting', Icons.trending_up_rounded, false, () {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ForecastScreen()));
-          }),
-          _buildSidebarItem(context, 'Asisten AI', Icons.smart_toy_rounded, false, () {
-            Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const ChatAiScreen()));
-          }),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSidebarItem(BuildContext context, String label, IconData icon, bool isSelected, VoidCallback onTap) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      decoration: BoxDecoration(color: isSelected ? AppTheme.lightBlueBg : Colors.transparent, borderRadius: BorderRadius.circular(10)),
-      child: ListTile(
-        leading: Icon(icon, color: isSelected ? AppTheme.primaryBlue : AppTheme.textSecondary, size: 22),
-        title: Text(label, style: TextStyle(color: isSelected ? AppTheme.primaryBlue : AppTheme.textSecondary, fontWeight: isSelected ? FontWeight.bold : FontWeight.normal, fontSize: 14)),
-        onTap: onTap,
-      ),
-    );
-  }
-
   Widget _buildNavigationDrawer(BuildContext context) {
     return Drawer(
       child: ListView(

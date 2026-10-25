@@ -68,6 +68,7 @@ pub async fn get_dashboard_summary(
         Err(err) => return err.into_response(),
     };
     let owner_id = claims.owner_id;
+    let is_owner_or_auditor = claims.role == "owner" || claims.role == "auditor";
 
     // Ambil data paket & kuota dari tabel PostgreSQL `users`
     let user_row = sqlx::query_as::<_, (Option<String>, Option<i32>)>(
@@ -85,16 +86,30 @@ pub async fn get_dashboard_summary(
         _ => PaketLangganan::Pro,
     };
 
-    // Ambil seluruh unit usaha milik owner terkait dari PostgreSQL
-    let usaha_rows = sqlx::query_as::<_, (i32, String, String, Option<String>)>(
-        "SELECT id, nama, jenis_usaha, kategori_portofolio 
-         FROM business_units 
-         WHERE owner_id = $1",
-    )
-    .bind(owner_id as i32)
-    .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
+    // Ambil unit usaha: Jika karyawan/manajer, batasi hanya unit yang diizinkan untuknya
+    let usaha_rows = if is_owner_or_auditor {
+        sqlx::query_as::<_, (i32, String, String, Option<String>)>(
+            "SELECT id, nama, jenis_usaha, kategori_portofolio 
+             FROM business_units 
+             WHERE owner_id = $1",
+        )
+        .bind(owner_id as i32)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default()
+    } else {
+        sqlx::query_as::<_, (i32, String, String, Option<String>)>(
+            "SELECT u.id, u.nama, u.jenis_usaha, u.kategori_portofolio 
+             FROM business_units u
+             JOIN user_units uu ON uu.unit_id = u.id
+             WHERE u.owner_id = $1 AND uu.user_id = $2",
+        )
+        .bind(owner_id as i32)
+        .bind(claims.user_id as i32)
+        .fetch_all(&state.db)
+        .await
+        .unwrap_or_default()
+    };
 
     let total_unit = usaha_rows.len();
     let mut unit_performa: Vec<UnitPerformaItem> = Vec::new();

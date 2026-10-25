@@ -1,11 +1,15 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../models/user_model.dart';
 import '../providers/auth_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
 import '../widgets/app_navigator.dart';
 import 'dashboard_screen.dart';
+import 'manager_dashboard_screen.dart';
+import 'pos_screen.dart';
+import 'gudang_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -25,6 +29,26 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   String? _errorMessage;
 
+  void _navigateByRole(AuthProvider auth) {
+    final role = auth.currentUser?.role ?? UserRole.owner;
+    switch (role) {
+      case UserRole.manager:
+        AppNavigator.pushReplacementFullscreen(context, const ManagerDashboardScreen());
+        break;
+      case UserRole.kasir:
+        AppNavigator.pushReplacementFullscreen(context, const PosScreen());
+        break;
+      case UserRole.adminGudang:
+        AppNavigator.pushReplacementFullscreen(context, const GudangScreen());
+        break;
+      case UserRole.owner:
+      case UserRole.auditor:
+      default:
+        AppNavigator.pushReplacementFullscreen(context, const DashboardScreen());
+        break;
+    }
+  }
+
   void _handleAction() async {
     setState(() {
       _isLoading = true;
@@ -38,7 +62,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted) {
         setState(() => _isLoading = false);
         if (ok) {
-          AppNavigator.pushReplacementFullscreen(context, const DashboardScreen());
+          _navigateByRole(auth);
         } else {
           setState(() => _errorMessage = 'Kode 2FA salah atau kurang dari 4 digit.');
         }
@@ -64,7 +88,7 @@ class _LoginScreenState extends State<LoginScreen> {
         setState(() => _isLoading = false);
         if (ok) {
           if (!auth.isAwaiting2FA) {
-            AppNavigator.pushReplacementFullscreen(context, const DashboardScreen());
+            _navigateByRole(auth);
           }
         } else {
           setState(() => _errorMessage = 'Registrasi gagal. Email mungkin sudah digunakan.');
@@ -76,7 +100,7 @@ class _LoginScreenState extends State<LoginScreen> {
         setState(() => _isLoading = false);
         if (ok) {
           if (!auth.isAwaiting2FA) {
-            AppNavigator.pushReplacementFullscreen(context, const DashboardScreen());
+            _navigateByRole(auth);
           }
         } else {
           setState(() {

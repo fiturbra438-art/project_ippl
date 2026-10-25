@@ -5,6 +5,7 @@ import '../models/user_model.dart';
 import '../providers/auth_provider.dart';
 import '../theme/app_theme.dart';
 import '../screens/dashboard_screen.dart';
+import '../screens/manager_dashboard_screen.dart';
 import '../screens/usaha_screen.dart';
 import '../screens/pos_screen.dart';
 import '../screens/gudang_screen.dart';
@@ -74,7 +75,11 @@ class AppSidebar extends StatelessWidget {
               children: [
                 _buildItem(context, 'Dashboard', Icons.dashboard_rounded, activeRoute == 'dashboard', () {
                   if (activeRoute != 'dashboard') {
-                    _navigateWithoutAnimation(context, const DashboardScreen());
+                    if (role == UserRole.manager) {
+                      _navigateWithoutAnimation(context, const ManagerDashboardScreen());
+                    } else {
+                      _navigateWithoutAnimation(context, const DashboardScreen());
+                    }
                   }
                 }),
                 if (role == UserRole.owner || role == UserRole.manager)

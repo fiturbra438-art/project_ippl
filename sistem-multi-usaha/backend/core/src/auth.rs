@@ -305,19 +305,22 @@ pub async fn login_owner(
         Json(ApiResponse {
             status: "success".to_string(),
             message: "Login Owner berhasil.".to_string(),
-            data: Some(
-                serde_json::to_value(OwnerAuthResponse {
-                    token,
-                    owner_id: owner.0 as i64,
-                    nama: owner.1,
-                    email: owner.2,
-                    nama_bisnis: owner.8.unwrap_or_else(|| "Grup Bisnis".to_string()),
-                    paket: PaketLangganan::Pro,
-                    kuota_unit_usaha: owner.6.unwrap_or(5),
-                    sisa_kuota_ai: owner.7.unwrap_or(250),
-                })
-                .unwrap(),
-            ),
+            data: match serde_json::to_value(OwnerAuthResponse {
+                token,
+                owner_id: owner.0 as i64,
+                nama: owner.1,
+                email: owner.2,
+                nama_bisnis: owner.8.unwrap_or_else(|| "Grup Bisnis".to_string()),
+                paket: PaketLangganan::Pro,
+                kuota_unit_usaha: owner.6.unwrap_or(5),
+                sisa_kuota_ai: owner.7.unwrap_or(250),
+            }) {
+                Ok(val) => Some(val),
+                Err(e) => {
+                    tracing::error!("Gagal serialisasi OwnerAuthResponse: {}", e);
+                    None
+                }
+            },
         }),
     )
 }
