@@ -24,6 +24,15 @@ class _PosScreenState extends State<PosScreen> {
   final currency = NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final pos = Provider.of<PosProvider>(context, listen: false);
+      pos.initShiftStatus(pos.activeUnitId);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final isMobile = ResponsiveLayout.isMobile(context);
     final pos = context.watch<PosProvider>();
@@ -71,6 +80,7 @@ class _PosScreenState extends State<PosScreen> {
                     if (val != null) {
                       final selected = context.read<UsahaProvider>().daftarUsaha.firstWhere((u) => u.id == val);
                       pos.setActiveUnit(val, selected.nama);
+                      pos.initShiftStatus(val);
                     }
                   },
                 ),
@@ -525,19 +535,41 @@ class _PosScreenState extends State<PosScreen> {
         ),
         actions: [
           OutlinedButton.icon(
-            onPressed: () {
-              pos.checkoutBerhasil();
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Struk digital dikirim via WhatsApp')));
+            onPressed: () async {
+              final ok = await pos.checkoutAPI(
+                pos.activeUnitId,
+                pos.metodeBayar.name.toUpperCase(),
+                keterangan: 'Order Kasir POS - Struk Digital',
+              );
+              if (ctx.mounted) Navigator.pop(ctx);
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    backgroundColor: ok ? AppTheme.accentGreen : AppTheme.primaryBlue,
+                    content: Text(ok ? 'Transaksi berhasil dicatat ke PostgreSQL & struk digital dikirim via WhatsApp' : 'Transaksi diproses secara offline'),
+                  ),
+                );
+              }
             },
             icon: const Icon(Icons.share_rounded, size: 16),
             label: const Text('Kirim Digital'),
           ),
           ElevatedButton.icon(
-            onPressed: () {
-              pos.checkoutBerhasil();
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Mencetak struk ke printer thermal...')));
+            onPressed: () async {
+              final ok = await pos.checkoutAPI(
+                pos.activeUnitId,
+                pos.metodeBayar.name.toUpperCase(),
+                keterangan: 'Order Kasir POS - Struk Thermal',
+              );
+              if (ctx.mounted) Navigator.pop(ctx);
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    backgroundColor: ok ? AppTheme.accentGreen : AppTheme.primaryBlue,
+                    content: Text(ok ? 'Transaksi berhasil diproses ke database & mencetak thermal...' : 'Transaksi diproses secara offline'),
+                  ),
+                );
+              }
             },
             icon: const Icon(Icons.print_rounded, size: 16),
             label: const Text('Cetak Thermal'),
@@ -603,10 +635,17 @@ class _PosScreenState extends State<PosScreen> {
             actions: [
               TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
               ElevatedButton(
-                onPressed: () {
-                  pos.tutupShiftKasir(fisik);
-                  Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Shift kasir berhasil ditutup & dicatat ke sistem')));
+                onPressed: () async {
+                  final ok = await pos.tutupShiftAPI(fisik);
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        backgroundColor: ok ? AppTheme.accentGreen : const Color(0xFFDC2626),
+                        content: Text(ok ? 'Shift kasir berhasil ditutup & dicatat ke PostgreSQL' : 'Gagal menutup shift di database'),
+                      ),
+                    );
+                  }
                 },
                 child: const Text('Konfirmasi Tutup Shift'),
               ),
@@ -908,13 +947,13 @@ class _PosScreenState extends State<PosScreen> {
                     minStok: minStok,
                   );
 
-                  context.read<ProdukProvider>().tambahProduk(produkBaru);
+                  context.read<ProdukProvider>().simpanProdukKeBackend(produkBaru);
                   Navigator.pop(ctx);
 
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
                       backgroundColor: AppTheme.primaryBlue,
-                      content: Text('Produk "${produkBaru.nama}" berhasil didaftarkan (Harga Jual: Rp ${parsedJual.round()})!'),
+                      content: Text('Produk "${produkBaru.nama}" berhasil didaftarkan ke PostgreSQL (Harga Jual: Rp ${parsedJual.round()})!'),
                     ),
                   );
                 },

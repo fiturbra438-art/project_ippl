@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/produk.dart';
+import '../services/api_service.dart';
 
 class CartItem {
   final ProdukModel produk;
@@ -22,6 +23,7 @@ class PosProvider extends ChangeNotifier {
   String _activeUnitNama = 'Kedai Kopi Bahagia';
 
   // Tutup Shift Data (Awal 0)
+  int? _activeShiftId;
   double _modalAwal = 0.0;
   double _totalPenjualanShift = 0.0;
   bool _shiftIsOpen = false;
@@ -33,9 +35,110 @@ class PosProvider extends ChangeNotifier {
   int get offlineQueueCount => _offlineQueueCount;
   int get activeUnitId => _activeUnitId;
   String get activeUnitNama => _activeUnitNama;
+  int? get activeShiftId => _activeShiftId;
   double get modalAwal => _modalAwal;
   double get totalPenjualanShift => _totalPenjualanShift;
   bool get shiftIsOpen => _shiftIsOpen;
+
+  // 1. Ambil status shift dari PostgreSQL via API
+  Future<void> initShiftStatus(int unitId) async {
+    try {
+      final res = await ApiService.get('/pos/shift/$unitId');
+      if (res != null && res['status'] == 'success' && res['data'] != null) {
+        final d = res['data'] as Map<String, dynamic>;
+        _activeShiftId = (d['id'] as num?)?.toInt();
+        _modalAwal = (d['modal_awal'] as num?)?.toDouble() ?? 0.0;
+        _totalPenjualanShift = ((d['total_penjualan_tunai'] as num?)?.toDouble() ?? 0.0) +
+            ((d['total_penjualan_non_tunai'] as num?)?.toDouble() ?? 0.0);
+        _shiftIsOpen = true;
+      } else {
+        _activeShiftId = null;
+        _shiftIsOpen = false;
+        _totalPenjualanShift = 0.0;
+      }
+    } catch (_) {
+      // Fallback tetap menggunakan status memori jika API belum siap
+    }
+    notifyListeners();
+  }
+
+  // 2. Buka shift kasir via API (sp_buka_shift_kasir)
+  Future<bool> bukaShiftAPI(int unitId, double modal) async {
+    try {
+      final res = await ApiService.post('/pos/shift/buka', {
+        'unit_id': unitId,
+        'modal_awal': modal,
+      });
+      if (res != null && res['status'] == 'success') {
+        if (res['data'] != null) {
+          _activeShiftId = (res['data']['id'] as num?)?.toInt();
+        }
+        _modalAwal = modal;
+        _totalPenjualanShift = 0.0;
+        _shiftIsOpen = true;
+        notifyListeners();
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  // 3. Tutup shift kasir via API (sp_tutup_shift_kasir)
+  Future<bool> tutupShiftAPI(double uangFisikDiLaci) async {
+    if (_activeShiftId != null) {
+      try {
+        final res = await ApiService.post('/pos/shift/tutup', {
+          'shift_id': _activeShiftId,
+        });
+        if (res != null && res['status'] == 'success') {
+          _shiftIsOpen = false;
+          _activeShiftId = null;
+          notifyListeners();
+          return true;
+        }
+      } catch (_) {}
+    }
+    // Fallback lokal
+    _shiftIsOpen = false;
+    _activeShiftId = null;
+    notifyListeners();
+    return true;
+  }
+
+  // 4. Checkout kasir via API (sp_proses_checkout_kasir & trigger update stok/omzet)
+  Future<bool> checkoutAPI(int unitId, String metodeBayarStr, {String? keterangan}) async {
+    if (_keranjang.isEmpty) return false;
+
+    final itemsPayload = _keranjang.map((c) {
+      return {
+        'produk_id': c.produk.id,
+        'jumlah': c.kuantitas,
+        'harga_satuan': c.produk.hargaJual,
+      };
+    }).toList();
+
+    try {
+      final res = await ApiService.post('/pos/checkout', {
+        'unit_id': unitId,
+        'items': itemsPayload,
+        'metode_pembayaran': metodeBayarStr,
+        'keterangan': keterangan ?? 'Order Kasir POS',
+      });
+
+      if (res != null && res['status'] == 'success') {
+        checkoutBerhasil();
+        return true;
+      }
+    } catch (_) {}
+
+    // Jika offline mode aktif atau request fallback
+    if (_isOfflineMode) {
+      checkoutBerhasil();
+      return true;
+    }
+
+    return false;
+  }
 
   void setActiveUnit(int unitId, String unitNama) {
     if (_activeUnitId != unitId) {

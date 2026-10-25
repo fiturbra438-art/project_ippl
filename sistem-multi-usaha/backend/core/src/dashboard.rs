@@ -158,14 +158,24 @@ pub async fn get_dashboard_summary(
         0.0
     };
 
-    // Hitung produk kritis dari view PostgreSQL
-    let total_produk_kritis: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM view_produk_stok_kritis WHERE unit_id IN (SELECT id FROM business_units WHERE owner_id = $1)"
-    )
-    .bind(owner_id as i32)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or(0);
+    // Hitung produk kritis dari view PostgreSQL (disesuaikan dengan peran pengguna)
+    let total_produk_kritis: i64 = if is_owner_or_auditor {
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM view_produk_stok_kritis WHERE unit_id IN (SELECT id FROM business_units WHERE owner_id = $1)",
+        )
+        .bind(owner_id as i32)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0)
+    } else {
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM view_produk_stok_kritis WHERE unit_id IN (SELECT unit_id FROM user_units WHERE user_id = $1)",
+        )
+        .bind(claims.user_id as i32)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0)
+    };
 
     let res = KonsolidasiDashboardResponse {
         total_unit_usaha: total_unit,
