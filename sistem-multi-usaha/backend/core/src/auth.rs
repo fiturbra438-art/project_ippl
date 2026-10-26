@@ -580,13 +580,13 @@ pub async fn login_karyawan(
         }
     };
 
-    // Platform guard: Pada platform Web, hanya Owner & Manager yang diizinkan masuk
-    if client_platform == "web" && karyawan.5 != "manager" {
+    // Platform guard: Web hanya untuk Owner, Manager, dan Admin Gudang
+    if client_platform == "web" && karyawan.5 != "manager" && karyawan.5 != "admin_gudang" {
         return (
             StatusCode::FORBIDDEN,
             Json(ApiResponse::<KaryawanAuthResponse> {
                 status: "error".to_string(),
-                message: "Portal Web dikhususkan untuk Owner dan Manajer. Staf Kasir atau Gudang silakan login melalui Aplikasi Desktop atau Mobile POS.".to_string(),
+                message: "Portal Web dikhususkan untuk Manajemen (Owner, Manajer, Admin Gudang). Staf Kasir silakan login melalui Aplikasi Desktop atau POS.".to_string(),
                 data: None,
             }),
         );

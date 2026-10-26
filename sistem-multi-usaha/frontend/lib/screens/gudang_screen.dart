@@ -2,11 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../models/gudang_model.dart';
+import '../models/user_model.dart';
+import '../providers/auth_provider.dart';
 import '../providers/gudang_provider.dart';
 import '../providers/produk_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
+import '../widgets/app_navigator.dart';
 import 'dashboard_screen.dart';
+import 'manager_dashboard_screen.dart';
+import 'login_screen.dart';
 
 class GudangScreen extends StatefulWidget {
   const GudangScreen({super.key});
@@ -33,22 +38,41 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
   @override
   Widget build(BuildContext context) {
     final isMobile = ResponsiveLayout.isMobile(context);
+    final auth = context.watch<AuthProvider>();
+    final isAdminGudang = auth.currentUser?.role == UserRole.adminGudang;
 
     return Scaffold(
       appBar: AppBar(
         backgroundColor: AppTheme.surfaceWhite,
         elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: AppTheme.textPrimary),
-          onPressed: () => Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen())),
-        ),
-        title: const Text('Gudang, Transfer & Stok Opname', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.bold, fontSize: 18)),
+        leading: isAdminGudang
+            ? null
+            : IconButton(
+                icon: const Icon(Icons.arrow_back, color: AppTheme.textPrimary),
+                onPressed: () {
+                  if (auth.currentUser?.role == UserRole.manager) {
+                    AppNavigator.backToDashboard(context, const ManagerDashboardScreen());
+                  } else {
+                    AppNavigator.backToDashboard(context, const DashboardScreen());
+                  }
+                },
+              ),
+        title: Text(isAdminGudang ? 'Portal Gudang & Logistik' : 'Gudang, Transfer & Stok Opname', style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.bold, fontSize: 18)),
         actions: [
           TextButton.icon(
             onPressed: () => _showImportDialog(context),
             icon: const Icon(Icons.upload_file_rounded, size: 18, color: AppTheme.primaryBlue),
             label: const Text('Impor CSV/XLSX', style: TextStyle(color: AppTheme.primaryBlue, fontWeight: FontWeight.bold)),
           ),
+          if (isAdminGudang)
+            IconButton(
+              tooltip: 'Keluar / Logout Gudang',
+              icon: const Icon(Icons.logout_rounded, color: Color(0xFFEF4444)),
+              onPressed: () {
+                auth.logout();
+                AppNavigator.pushReplacementFullscreen(context, const LoginScreen());
+              },
+            ),
           const SizedBox(width: 8),
         ],
         bottom: TabBar(

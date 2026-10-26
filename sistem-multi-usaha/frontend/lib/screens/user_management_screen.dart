@@ -542,11 +542,30 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
             ElevatedButton(
               onPressed: () async {
                 if (namaCtrl.text.isNotEmpty && emailCtrl.text.isNotEmpty && passwordCtrl.text.isNotEmpty) {
+                  if (passwordCtrl.text.length < 10) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        backgroundColor: Color(0xFFDC2626),
+                        content: Text('Password minimal 10 karakter!'),
+                      ),
+                    );
+                    return;
+                  }
+                  if (selectedUnitIds.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        backgroundColor: Color(0xFFDC2626),
+                        content: Text('Pilih minimal 1 unit usaha yang ditugaskan!'),
+                      ),
+                    );
+                    return;
+                  }
+
                   final auth = Provider.of<AuthProvider>(context, listen: false);
                   final messenger = ScaffoldMessenger.of(context);
                   final navigator = Navigator.of(ctx);
 
-                  final ok = await auth.tambahKaryawanKeBackend(
+                  final errMsg = await auth.tambahKaryawanKeBackend(
                     nama: namaCtrl.text.trim(),
                     email: emailCtrl.text.trim(),
                     password: passwordCtrl.text,
@@ -554,13 +573,19 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
                     unitAksesIds: selectedUnitIds,
                   );
                   navigator.pop();
-                  if (ok) {
+                  if (errMsg == null) {
                     messenger.showSnackBar(
-                      SnackBar(content: Text('Akun karyawan ${emailCtrl.text} berhasil didaftarkan ke PostgreSQL!')),
+                      SnackBar(
+                        backgroundColor: AppTheme.accentGreen,
+                        content: Text('Akun karyawan ${emailCtrl.text} berhasil didaftarkan ke PostgreSQL!'),
+                      ),
                     );
                   } else {
                     messenger.showSnackBar(
-                      const SnackBar(content: Text('Gagal mendaftarkan karyawan. Periksa koneksi atau duplikasi email.')),
+                      SnackBar(
+                        backgroundColor: const Color(0xFFDC2626),
+                        content: Text('Gagal mendaftarkan karyawan: $errMsg'),
+                      ),
                     );
                   }
                 }

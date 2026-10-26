@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum PeranPengguna {
     Owner,
     Manager,
     Kasir,
+    #[serde(alias = "admingudang")]
     AdminGudang,
     Auditor,
 }

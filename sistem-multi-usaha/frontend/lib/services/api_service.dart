@@ -6,10 +6,15 @@ class ApiService {
   // Dapat dikonfigurasi saat build menggunakan:
   // flutter build apk --dart-define=BACKEND_URL=http://192.168.1.xx:8000/api
   // Default fallback: http://127.0.0.1:8000/api (untuk Desktop / Local)
-  static const String baseUrl = String.fromEnvironment(
-    'BACKEND_URL',
-    defaultValue: 'http://127.0.0.1:8000/api',
-  );
+  static String get baseUrl {
+    const envUrl = String.fromEnvironment('BACKEND_URL');
+    if (envUrl.isNotEmpty) return envUrl;
+    if (kIsWeb) {
+      final origin = Uri.base.origin;
+      return '$origin/api';
+    }
+    return 'http://127.0.0.1:8000/api';
+  }
   static String? authToken;
 
   static Map<String, String> get headers {
@@ -40,14 +45,18 @@ class ApiService {
   // Generic POST
   static Future<Map<String, dynamic>?> post(String endpoint, Map<String, dynamic> body) async {
     try {
+      final uri = Uri.parse('$baseUrl$endpoint');
       final res = await http.post(
-        Uri.parse('$baseUrl$endpoint'),
+        uri,
         headers: headers,
         body: jsonEncode(body),
       );
-      return jsonDecode(res.body) as Map<String, dynamic>;
+      if (res.body.isNotEmpty) {
+        return jsonDecode(res.body) as Map<String, dynamic>;
+      }
     } catch (e) {
-      // Fallback
+      debugPrint('API POST error on $endpoint: $e');
+      return {'status': 'error', 'message': e.toString()};
     }
     return null;
   }

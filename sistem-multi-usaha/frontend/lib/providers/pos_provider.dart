@@ -26,6 +26,10 @@ class PosProvider extends ChangeNotifier {
   int? _activeShiftId;
   double _modalAwal = 0.0;
   double _totalPenjualanShift = 0.0;
+  double _totalPenjualanTunai = 0.0;
+  double _totalPenjualanNonTunai = 0.0;
+  int _totalTransaksiShift = 0;
+  String _waktuBukaShift = '';
   bool _shiftIsOpen = false;
 
   List<CartItem> get keranjang => _keranjang;
@@ -38,6 +42,10 @@ class PosProvider extends ChangeNotifier {
   int? get activeShiftId => _activeShiftId;
   double get modalAwal => _modalAwal;
   double get totalPenjualanShift => _totalPenjualanShift;
+  double get totalPenjualanTunai => _totalPenjualanTunai;
+  double get totalPenjualanNonTunai => _totalPenjualanNonTunai;
+  int get totalTransaksiShift => _totalTransaksiShift;
+  String get waktuBukaShift => _waktuBukaShift;
   bool get shiftIsOpen => _shiftIsOpen;
 
   // 1. Ambil status shift dari PostgreSQL via API
@@ -48,13 +56,20 @@ class PosProvider extends ChangeNotifier {
         final d = res['data'] as Map<String, dynamic>;
         _activeShiftId = (d['id'] as num?)?.toInt();
         _modalAwal = (d['modal_awal'] as num?)?.toDouble() ?? 0.0;
-        _totalPenjualanShift = ((d['total_penjualan_tunai'] as num?)?.toDouble() ?? 0.0) +
-            ((d['total_penjualan_non_tunai'] as num?)?.toDouble() ?? 0.0);
+        _totalPenjualanTunai = (d['total_penjualan_tunai'] as num?)?.toDouble() ?? 0.0;
+        _totalPenjualanNonTunai = (d['total_penjualan_non_tunai'] as num?)?.toDouble() ?? 0.0;
+        _totalPenjualanShift = _totalPenjualanTunai + _totalPenjualanNonTunai;
+        _totalTransaksiShift = (d['total_transaksi'] as num?)?.toInt() ?? 0;
+        _waktuBukaShift = d['waktu_buka'] as String? ?? '';
         _shiftIsOpen = true;
       } else {
         _activeShiftId = null;
         _shiftIsOpen = false;
         _totalPenjualanShift = 0.0;
+        _totalPenjualanTunai = 0.0;
+        _totalPenjualanNonTunai = 0.0;
+        _totalTransaksiShift = 0;
+        _waktuBukaShift = '';
       }
     } catch (_) {
       // Fallback tetap menggunakan status memori jika API belum siap
@@ -198,7 +213,13 @@ class PosProvider extends ChangeNotifier {
     if (_isOfflineMode) {
       _offlineQueueCount++;
     }
+    if (_metodeBayar == MetodeBayar.tunai) {
+      _totalPenjualanTunai += grandTotal;
+    } else {
+      _totalPenjualanNonTunai += grandTotal;
+    }
     _totalPenjualanShift += grandTotal;
+    _totalTransaksiShift++;
     _keranjang.clear();
     _diskonPersen = 0;
     notifyListeners();
@@ -206,12 +227,17 @@ class PosProvider extends ChangeNotifier {
 
   void tutupShiftKasir(double uangFisikDiLaci) {
     _shiftIsOpen = false;
+    _activeShiftId = null;
     notifyListeners();
   }
 
   void bukaShiftBaru(double modal) {
     _modalAwal = modal;
     _totalPenjualanShift = 0;
+    _totalPenjualanTunai = 0;
+    _totalPenjualanNonTunai = 0;
+    _totalTransaksiShift = 0;
+    _waktuBukaShift = DateTime.now().toString().substring(0, 16);
     _shiftIsOpen = true;
     notifyListeners();
   }

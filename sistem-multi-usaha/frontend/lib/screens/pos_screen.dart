@@ -11,6 +11,8 @@ import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
 import '../widgets/app_navigator.dart';
 import 'dashboard_screen.dart';
+import 'manager_dashboard_screen.dart';
+import 'login_screen.dart';
 
 class PosScreen extends StatefulWidget {
   const PosScreen({super.key});
@@ -36,18 +38,33 @@ class _PosScreenState extends State<PosScreen> {
   Widget build(BuildContext context) {
     final isMobile = ResponsiveLayout.isMobile(context);
     final pos = context.watch<PosProvider>();
+    final auth = context.watch<AuthProvider>();
+    final isKasir = auth.currentUser?.role == UserRole.kasir;
 
     return Scaffold(
       appBar: AppBar(
         backgroundColor: AppTheme.surfaceWhite,
         elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: AppTheme.textPrimary),
-          onPressed: () => AppNavigator.backToDashboard(context, const DashboardScreen()),
-        ),
+        leading: isKasir
+            ? IconButton(
+                tooltip: 'Dashboard & Ringkasan Shift',
+                icon: const Icon(Icons.analytics_outlined, color: AppTheme.primaryBlue),
+                onPressed: () => _showKasirDashboardModal(context),
+              )
+            : IconButton(
+                tooltip: 'Kembali ke Dashboard',
+                icon: const Icon(Icons.arrow_back, color: AppTheme.textPrimary),
+                onPressed: () {
+                  if (auth.currentUser?.role == UserRole.manager) {
+                    AppNavigator.backToDashboard(context, const ManagerDashboardScreen());
+                  } else {
+                    AppNavigator.backToDashboard(context, const DashboardScreen());
+                  }
+                },
+              ),
         title: Row(
           children: [
-            const Text('Mesin Kasir (POS)', style: TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.bold, fontSize: 18)),
+            Text(isKasir ? 'Kasir POS' : 'Mesin Kasir (POS)', style: const TextStyle(color: AppTheme.textPrimary, fontWeight: FontWeight.bold, fontSize: 18)),
             const SizedBox(width: 12),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -60,7 +77,6 @@ class _PosScreenState extends State<PosScreen> {
                 child: DropdownButton<int>(
                   value: pos.activeUnitId,
                   items: () {
-                    final auth = context.watch<AuthProvider>();
                     final usahaProv = context.watch<UsahaProvider>();
                     final currentUser = auth.currentUser;
                     final isOwnerOrAuditor = currentUser?.role == UserRole.owner || currentUser?.role == UserRole.auditor;
@@ -119,6 +135,11 @@ class _PosScreenState extends State<PosScreen> {
         ),
         actions: [
           IconButton(
+            tooltip: 'Ringkasan / Dashboard Shift',
+            icon: const Icon(Icons.pie_chart_outline_rounded, color: AppTheme.primaryBlue),
+            onPressed: () => _showKasirDashboardModal(context),
+          ),
+          IconButton(
             tooltip: 'Simulasi Putus/Sambung Internet',
             icon: Icon(
               pos.isOfflineMode ? Icons.wifi_off_rounded : Icons.wifi_rounded,
@@ -135,7 +156,13 @@ class _PosScreenState extends State<PosScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             ),
           ),
-          const SizedBox(width: 16),
+          const SizedBox(width: 8),
+          IconButton(
+            tooltip: 'Keluar / Logout Kasir',
+            icon: const Icon(Icons.logout_rounded, color: Color(0xFFEF4444)),
+            onPressed: () => _showLogoutConfirmation(context),
+          ),
+          const SizedBox(width: 12),
         ],
       ),
       body: isMobile ? _buildMobileView(context) : _buildDesktopView(context),
@@ -574,6 +601,335 @@ class _PosScreenState extends State<PosScreen> {
             icon: const Icon(Icons.print_rounded, size: 16),
             label: const Text('Cetak Thermal'),
           ),
+        ],
+      ),
+    );
+  }
+
+  // DIALOG BUKA SHIFT KASIR
+  void _showBukaShiftDialog(BuildContext context) {
+    final pos = Provider.of<PosProvider>(context, listen: false);
+    final modalCtrl = TextEditingController(text: pos.modalAwal > 0 ? pos.modalAwal.round().toString() : '50000');
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: const [
+            Icon(Icons.add_circle_outline_rounded, color: AppTheme.primaryBlue),
+            SizedBox(width: 8),
+            Text('Buka Shift Kasir Baru', style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: SizedBox(
+          width: 340,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Unit: ${pos.activeUnitNama}', style: const TextStyle(fontWeight: FontWeight.w600, color: AppTheme.textSecondary)),
+              const SizedBox(height: 12),
+              TextField(
+                controller: modalCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Modal Awal Kas Laci (Rp) *',
+                  hintText: '50000',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.account_balance_wallet_rounded, color: AppTheme.primaryBlue),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Batal'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryBlue),
+            onPressed: () async {
+              final modal = double.tryParse(modalCtrl.text) ?? 50000;
+              final ok = await pos.bukaShiftAPI(pos.activeUnitId, modal);
+              if (ctx.mounted) Navigator.pop(ctx);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    backgroundColor: ok ? AppTheme.accentGreen : AppTheme.primaryBlue,
+                    content: Text(ok ? 'Shift kasir berhasil dibuka dengan modal ${currency.format(modal)}' : 'Shift kasir aktif (mode offline)'),
+                  ),
+                );
+              }
+            },
+            child: const Text('Mulai Shift'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // DIALOG LOGOUT KASIR
+  void _showLogoutConfirmation(BuildContext context) {
+    final pos = Provider.of<PosProvider>(context, listen: false);
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: const [
+            Icon(Icons.logout_rounded, color: Color(0xFFDC2626)),
+            SizedBox(width: 8),
+            Text('Keluar Akun Kasir', style: TextStyle(fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Apakah kasir "${auth.currentUser?.nama ?? "Kasir"}" yakin ingin keluar dari sesi POS?'),
+            if (pos.shiftIsOpen) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF3C7),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFF59E0B)),
+                ),
+                child: Row(
+                  children: const [
+                    Icon(Icons.warning_amber_rounded, color: Color(0xFFD97706), size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Perhatian: Shift kasir masih berstatus TERBUKA. Disarankan menutup shift terlebih dahulu agar kas laci tercatat rapi.',
+                        style: TextStyle(fontSize: 12, color: Color(0xFF92400E)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Batal'),
+          ),
+          if (pos.shiftIsOpen)
+            OutlinedButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                _showTutupShiftDialog(context);
+              },
+              child: const Text('Tutup Shift Dulu'),
+            ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
+            onPressed: () {
+              Navigator.pop(ctx);
+              auth.logout();
+              AppNavigator.pushReplacementFullscreen(context, const LoginScreen());
+            },
+            child: const Text('Ya, Keluar Akun'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // MODAL MINI DASHBOARD & RINGKASAN SHIFT KASIR
+  void _showKasirDashboardModal(BuildContext context) {
+    final pos = Provider.of<PosProvider>(context, listen: false);
+    final auth = Provider.of<AuthProvider>(context, listen: false);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(24),
+        decoration: const BoxDecoration(
+          color: AppTheme.surfaceWhite,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    CircleAvatar(
+                      backgroundColor: AppTheme.lightBlueBg,
+                      child: const Icon(Icons.point_of_sale_rounded, color: AppTheme.primaryBlue),
+                    ),
+                    const SizedBox(width: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Dashboard Shift Kasir',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
+                        ),
+                        Text(
+                          'Petugas: ${auth.currentUser?.nama ?? "Kasir"} | Unit: ${pos.activeUnitNama}',
+                          style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close_rounded),
+                  onPressed: () => Navigator.pop(ctx),
+                ),
+              ],
+            ),
+            const Divider(height: 28),
+            // KARTU METRIK SHIFT
+            Row(
+              children: [
+                Expanded(
+                  child: _buildMetricCard(
+                    title: 'Status Shift',
+                    value: pos.shiftIsOpen ? 'TERBUKA' : 'TERTUTUP',
+                    subtitle: pos.waktuBukaShift.isNotEmpty ? 'Buka: ${pos.waktuBukaShift}' : 'Belum buka shift',
+                    icon: pos.shiftIsOpen ? Icons.check_circle_outline_rounded : Icons.lock_outline_rounded,
+                    color: pos.shiftIsOpen ? AppTheme.accentGreen : const Color(0xFFDC2626),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _buildMetricCard(
+                    title: 'Total Transaksi',
+                    value: '${pos.totalTransaksiShift} Struk',
+                    subtitle: 'Pesanan terselesaikan',
+                    icon: Icons.receipt_long_rounded,
+                    color: AppTheme.primaryBlue,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: _buildMetricCard(
+                    title: 'Modal Awal Kasir',
+                    value: currency.format(pos.modalAwal),
+                    subtitle: 'Uang kembalian awal',
+                    icon: Icons.account_balance_wallet_outlined,
+                    color: const Color(0xFF6366F1),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _buildMetricCard(
+                    title: 'Total Penjualan Shift',
+                    value: currency.format(pos.totalPenjualanShift),
+                    subtitle: 'Tunai: ${currency.format(pos.totalPenjualanTunai)}',
+                    icon: Icons.monetization_on_outlined,
+                    color: const Color(0xFF059669),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppTheme.backgroundLight,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppTheme.cardBorder),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Total Uang Seharusnya di Laci (Tunai)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.textSecondary)),
+                      const SizedBox(height: 4),
+                      Text(
+                        currency.format(pos.modalAwal + pos.totalPenjualanTunai),
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
+                      ),
+                    ],
+                  ),
+                  ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryBlue),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _showBukaShiftDialog(context);
+                    },
+                    icon: const Icon(Icons.add_circle_outline_rounded, size: 16),
+                    label: Text(pos.shiftIsOpen ? 'Perbarui Modal' : 'Buka Shift Baru'),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFDC2626),
+                      side: const BorderSide(color: Color(0xFFDC2626)),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _showLogoutConfirmation(context);
+                    },
+                    icon: const Icon(Icons.logout_rounded),
+                    label: const Text('Keluar dari Akun Kasir'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMetricCard({
+    required String title,
+    required String value,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withAlpha(15),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withAlpha(50)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(title, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color)),
+              Icon(icon, size: 18, color: color),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(value, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
+          const SizedBox(height: 4),
+          Text(subtitle, style: const TextStyle(fontSize: 10, color: AppTheme.textSecondary)),
         ],
       ),
     );

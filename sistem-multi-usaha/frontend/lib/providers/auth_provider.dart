@@ -73,8 +73,8 @@ class AuthProvider extends ChangeNotifier {
         final peranStr = data['peran'] as String? ?? 'kasir';
         final roleEnum = matchRoleFromString(peranStr);
 
-        // Platform Guard: Pada Web, batasi hanya untuk Owner & Manager
-        if (kIsWeb && roleEnum != UserRole.manager && roleEnum != UserRole.owner) {
+        // Platform Guard: Pada Web, izinkan Owner, Manager, dan Admin Gudang
+        if (kIsWeb && roleEnum != UserRole.manager && roleEnum != UserRole.owner && roleEnum != UserRole.adminGudang) {
           ApiService.authToken = null;
           return false;
         }
@@ -178,7 +178,7 @@ class AuthProvider extends ChangeNotifier {
   }
 
   // Daftarkan karyawan dengan password ke PostgreSQL backend
-  Future<bool> tambahKaryawanKeBackend({
+  Future<String?> tambahKaryawanKeBackend({
     required String nama,
     required String email,
     required String password,
@@ -209,31 +209,28 @@ class AuthProvider extends ChangeNotifier {
         'unit_akses_ids': unitAksesIds,
       });
 
-      if (res != null && res['status'] == 'success') {
-        final newId = (res['data']?['id'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch;
-        _penggunaList.add(UserModel(
-          id: newId,
-          nama: nama,
-          email: email,
-          role: role,
-          unitAksesIds: unitAksesIds,
-        ));
-        addAuditLog('TAMBAH_KARYAWAN', 'PENGGUNA', email, 'Owner mendaftarkan karyawan $roleStr dengan password resmi');
-        notifyListeners();
-        return true;
+      if (res != null) {
+        if (res['status'] == 'success') {
+          final newId = (res['data']?['id'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch;
+          _penggunaList.add(UserModel(
+            id: newId,
+            nama: nama,
+            email: email,
+            role: role,
+            unitAksesIds: unitAksesIds,
+          ));
+          addAuditLog('TAMBAH_KARYAWAN', 'PENGGUNA', email, 'Owner mendaftarkan karyawan $roleStr dengan password resmi');
+          notifyListeners();
+          return null; // Sukses tanpa error
+        } else {
+          return res['message'] as String? ?? 'Gagal mendaftarkan karyawan.';
+        }
       }
-    } catch (_) {}
+    } catch (e) {
+      return 'Terjadi kendala jaringan: $e';
+    }
 
-    // Fallback lokal
-    _penggunaList.add(UserModel(
-      id: DateTime.now().millisecondsSinceEpoch,
-      nama: nama,
-      email: email,
-      role: role,
-      unitAksesIds: unitAksesIds,
-    ));
-    notifyListeners();
-    return true;
+    return 'Gagal terhubung ke backend server.';
   }
 
   void logout() {
