@@ -19,8 +19,8 @@ class PosProvider extends ChangeNotifier {
   MetodeBayar _metodeBayar = MetodeBayar.qris;
   bool _isOfflineMode = false;
   int _offlineQueueCount = 0;
-  int _activeUnitId = 1;
-  String _activeUnitNama = 'Kedai Kopi Bahagia';
+  int _activeUnitId = 0;
+  String _activeUnitNama = '';
 
   // Tutup Shift Data (Awal 0)
   int? _activeShiftId;
