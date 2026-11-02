@@ -38,6 +38,9 @@ impl AppState {
         let _ = sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_expires_at TIMESTAMP")
             .execute(&pool)
             .await;
+        let _ = sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_attempts INT NOT NULL DEFAULT 0")
+            .execute(&pool)
+            .await;
 
         // 1c. Migrasi skema kasir fleksibel (Rental, Jasa, Custom Note & Duration) pada tabel transactions & transaction_items
         let _ = sqlx::query("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS customer_name VARCHAR(150)")
@@ -68,6 +71,9 @@ impl AppState {
         let _ = sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS notes TEXT")
             .execute(&pool)
             .await;
+        let _ = sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS diskon NUMERIC(14,2) NOT NULL DEFAULT 0")
+            .execute(&pool)
+            .await;
 
         // 1d. Tabel Lifecycle Rental & Jasa (Active Orders, Status Pengerjaan & Pengembalian Sewa)
         let _ = sqlx::query(
@@ -84,6 +90,7 @@ impl AppState {
                 actual_end_time TIMESTAMP,
                 duration INT NOT NULL DEFAULT 1,
                 duration_unit VARCHAR(20) NOT NULL DEFAULT 'jam',
+                qty INT NOT NULL DEFAULT 1,
                 status VARCHAR(30) NOT NULL,
                 assigned_staff VARCHAR(100),
                 deposit_amount NUMERIC(14,2) DEFAULT 0,
@@ -99,6 +106,18 @@ impl AppState {
             .execute(&pool)
             .await;
         let _ = sqlx::query("CREATE INDEX IF NOT EXISTS ix_rental_service_product_active ON rental_service_orders(product_id, status)")
+            .execute(&pool)
+            .await;
+        // Kolom tambahan untuk tabel yang mungkin sudah dibuat versi lama
+        let _ = sqlx::query("ALTER TABLE rental_service_orders ADD COLUMN IF NOT EXISTS qty INT NOT NULL DEFAULT 1")
+            .execute(&pool)
+            .await;
+
+        // 1e. Status & waktu terima untuk mutasi transfer stok
+        let _ = sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'diterima'")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS waktu_terima TIMESTAMP")
             .execute(&pool)
             .await;
 

@@ -44,14 +44,14 @@ async fn main() {
 
     let shared_state = Arc::new(AppState::new(pool).await);
 
-    let cors_origin =
-        std::env::var("CORS_ORIGIN").unwrap_or_else(|_| "http://localhost:8000".to_string());
+    let cors_origin_env = std::env::var("CORS_ORIGIN")
+        .unwrap_or_else(|_| "http://localhost:8000,http://127.0.0.1:8000,http://localhost:3000".to_string());
+    let allowed_origins: Vec<axum::http::HeaderValue> = cors_origin_env
+        .split(',')
+        .filter_map(|s| s.trim().parse::<axum::http::HeaderValue>().ok())
+        .collect();
     let cors = CorsLayer::new()
-        .allow_origin(
-            cors_origin
-                .parse::<axum::http::HeaderValue>()
-                .expect("CORS_ORIGIN tidak valid"),
-        )
+        .allow_origin(allowed_origins)
         .allow_methods([
             axum::http::Method::GET,
             axum::http::Method::POST,

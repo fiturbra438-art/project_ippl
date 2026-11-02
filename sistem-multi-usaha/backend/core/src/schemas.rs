@@ -140,6 +140,8 @@ pub struct BukaShiftRequest {
 #[derive(Debug, Deserialize)]
 pub struct TutupShiftRequest {
     pub shift_id: i64,
+    #[serde(default)]
+    pub uang_fisik_laci: Option<f64>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -159,6 +161,8 @@ pub struct CheckoutItemRequest {
     pub unit_durasi: Option<String>,
     #[serde(default)]
     pub catatan: Option<String>,
+    #[serde(default)]
+    pub diskon: Option<f64>, // Diskon nominal per baris item
 }
 
 #[derive(Debug, Deserialize)]
@@ -167,6 +171,14 @@ pub struct CheckoutRequest {
     pub items: Vec<CheckoutItemRequest>,
     pub metode_pembayaran: String, // Tunai, QRIS, Transfer Bank
     pub keterangan: Option<String>,
+    #[serde(default)]
+    pub customer_name: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub operation_mode: Option<String>, // retail, rental, jasa, fleksibel
+    #[serde(default)]
+    pub diskon_nominal: Option<f64>, // Diskon nominal tingkat transaksi
 }
 
 #[derive(Debug, Deserialize)]

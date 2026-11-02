@@ -159,6 +159,7 @@ pub struct RentalServiceOrderModel {
     pub actual_end_time: Option<String>,
     pub duration: i32,
     pub duration_unit: String,
+    pub qty: i32,
     pub status: String, // 'active', 'returned', 'overdue', 'queued', 'in_progress', 'ready', 'completed'
     pub assigned_staff: Option<String>,
     pub deposit_amount: f64,

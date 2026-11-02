@@ -220,6 +220,7 @@ class PosProvider extends ChangeNotifier {
       try {
         final res = await ApiService.post('/pos/shift/tutup', {
           'shift_id': _activeShiftId,
+          'uang_fisik_laci': uangFisikDiLaci,
         });
         if (res != null && res['status'] == 'success') {
           _shiftIsOpen = false;
@@ -240,7 +241,7 @@ class PosProvider extends ChangeNotifier {
   Future<bool> checkoutAPI(int unitId, String metodeBayarStr, {String? keterangan}) async {
     if (_keranjang.isEmpty) return false;
 
-    // Kirim struktur item lengkap (id produk opsional, nama custom, tipe, tarif sewa/jasa, durasi sewa, catatan)
+    // Kirim struktur item lengkap (id produk opsional, nama custom, tipe, tarif sewa/jasa, durasi sewa, catatan, diskon per item)
     final itemsPayload = _keranjang.map((c) {
       return {
         'produk_id': c.produk?.id,
@@ -251,6 +252,7 @@ class PosProvider extends ChangeNotifier {
         'durasi': c.durasiSewa,
         'unit_durasi': c.unitDurasi,
         'catatan': c.catatan,
+        'diskon': c.diskonNominal,
       };
     }).toList();
 
@@ -287,6 +289,10 @@ class PosProvider extends ChangeNotifier {
         'items': itemsPayload,
         'metode_pembayaran': metodeBayarStr,
         'keterangan': finalKeterangan.trim(),
+        'customer_name': _namaPelanggan.trim().isNotEmpty ? _namaPelanggan.trim() : null,
+        'notes': _catatanTransaksi.trim().isNotEmpty ? _catatanTransaksi.trim() : null,
+        'operation_mode': _modeOperasi.name,
+        'diskon_nominal': nominalDiskon,
       });
 
       if (res != null && res['status'] == 'success') {

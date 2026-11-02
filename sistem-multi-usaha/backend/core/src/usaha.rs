@@ -136,6 +136,18 @@ pub async fn create_usaha(
     let aktor_nama = claims.sub.clone();
     let aktor_role = claims.role.clone();
 
+    if !["owner", "manager"].contains(&aktor_role.as_str()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<UsahaModel> {
+                status: "error".to_string(),
+                message: "Role Anda tidak berwenang menambah unit usaha.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
+
     // Cek kuota tier owner
     let owners = state.owners.read().await;
     let owner = match owners.iter().find(|o| o.id == owner_id) {
@@ -189,7 +201,19 @@ pub async fn create_usaha(
 
     let new_id = match row_id {
         Ok(r) => r.0 as i64,
-        Err(_) => (usahas.len() as i64) + 1,
+        Err(e) => {
+            tracing::error!("Gagal menyimpan unit usaha baru: {}", e);
+            drop(usahas);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<UsahaModel> {
+                    status: "error".to_string(),
+                    message: "Gagal menyimpan unit usaha baru ke database.".to_string(),
+                    data: None,
+                }),
+            )
+                .into_response();
+        }
     };
 
     let new_usaha = UsahaModel {
@@ -248,6 +272,18 @@ pub async fn update_usaha(
         Ok(c) => c,
         Err(err) => return err.into_response(),
     };
+
+    if !["owner", "manager"].contains(&claims.role.as_str()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<UsahaModel> {
+                status: "error".to_string(),
+                message: "Role Anda tidak berwenang mengubah unit usaha.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
 
     // Validasi apakah unit ini benar-benar milik owner yang sedang login
     let exists: bool = sqlx::query_scalar(
@@ -343,6 +379,18 @@ pub async fn toggle_pos(
         Err(err) => return err.into_response(),
     };
 
+    if !["owner", "manager"].contains(&claims.role.as_str()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<UsahaModel> {
+                status: "error".to_string(),
+                message: "Role Anda tidak berwenang mengubah status POS.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
+
     let mut usahas = state.usahas.write().await;
     if let Some(u) = usahas
         .iter_mut()
@@ -391,6 +439,18 @@ pub async fn delete_usaha(
         Ok(c) => c,
         Err(err) => return err.into_response(),
     };
+
+    if claims.role != "owner" {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<()> {
+                status: "error".to_string(),
+                message: "Hanya pemilik bisnis yang boleh menghapus unit usaha.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
 
     let res = sqlx::query("DELETE FROM business_units WHERE id = $1 AND owner_id = $2")
         .bind(id as i32)

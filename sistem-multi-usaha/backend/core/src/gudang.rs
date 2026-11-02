@@ -298,6 +298,18 @@ pub async fn create_stok_opname(
             .into_response();
     }
 
+    if payload.stok_fisik < 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<StokOpnameModel> {
+                status: "error".to_string(),
+                message: "Stok fisik tidak boleh bernilai negatif.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
+
     // Ambil nama unit
     let nama_unit: String = sqlx::query_scalar("SELECT nama FROM business_units WHERE id = $1")
         .bind(payload.unit_id as i32)
@@ -307,14 +319,15 @@ pub async fn create_stok_opname(
         .flatten()
         .unwrap_or_else(|| "Unit Usaha".to_string());
 
-    // Ambil stok sistem saat ini
+    // Ambil stok sistem saat ini (dibatasi produk milik owner)
     let stok_sistem: i32 = sqlx::query_scalar(
         "SELECT i.qty FROM inventories i
          JOIN products p ON i.product_id = p.id
-         WHERE i.unit_id = $1 AND LOWER(p.nama) = LOWER($2)",
+         WHERE i.unit_id = $1 AND LOWER(p.nama) = LOWER($2) AND p.owner_id = $3",
     )
     .bind(payload.unit_id as i32)
     .bind(&payload.nama_produk)
+    .bind(owner_id as i32)
     .fetch_optional(&state.db)
     .await
     .ok()
@@ -323,15 +336,16 @@ pub async fn create_stok_opname(
 
     let selisih = payload.stok_fisik - stok_sistem;
 
-    // Rekonsiliasi update stok fisik ke PostgreSQL `inventories`
+    // Rekonsiliasi update stok fisik ke PostgreSQL `inventories` (dibatasi owner_id)
     let _ = sqlx::query(
         "UPDATE inventories 
          SET qty = $1 
-         WHERE unit_id = $2 AND product_id = (SELECT id FROM products WHERE LOWER(nama) = LOWER($3) LIMIT 1)"
+         WHERE unit_id = $2 AND product_id = (SELECT id FROM products WHERE LOWER(nama) = LOWER($3) AND owner_id = $4 LIMIT 1)"
     )
     .bind(payload.stok_fisik)
     .bind(payload.unit_id as i32)
     .bind(&payload.nama_produk)
+    .bind(owner_id as i32)
     .execute(&state.db)
     .await;
 
@@ -400,9 +414,10 @@ pub async fn list_transfer_stok(
     };
     let owner_id = claims.owner_id;
 
-    let rows = sqlx::query_as::<_, (i32, Option<i32>, Option<i32>, i32, chrono::NaiveDateTime, Option<String>, Option<String>, Option<String>, Option<i32>)>(
+    let rows = sqlx::query_as::<_, (i32, Option<i32>, Option<i32>, i32, chrono::NaiveDateTime, Option<String>, Option<String>, Option<String>, Option<i32>, Option<String>, Option<chrono::NaiveDateTime>)>(
         "SELECT sm.id, sm.unit_asal_id, sm.unit_tujuan_id, sm.qty, sm.tanggal, 
-                ua.nama AS nama_unit_asal, ut.nama AS nama_unit_tujuan, p.nama AS nama_produk, p.id AS produk_id
+                ua.nama AS nama_unit_asal, ut.nama AS nama_unit_tujuan, p.nama AS nama_produk, p.id AS produk_id,
+                sm.status, sm.waktu_terima
          FROM stock_movements sm
          LEFT JOIN business_units ua ON sm.unit_asal_id = ua.id
          LEFT JOIN business_units ut ON sm.unit_tujuan_id = ut.id
@@ -430,8 +445,12 @@ pub async fn list_transfer_stok(
                 nama_produk: r.7.unwrap_or_else(|| "Transfer Barang".to_string()),
                 jumlah: r.3,
                 waktu_kirim: r.4.format("%Y-%m-%d %H:%M").to_string(),
-                waktu_terima: Some(r.4.format("%Y-%m-%d %H:%M").to_string()),
-                status: StatusTransfer::Diterima,
+                waktu_terima: r.10.map(|t| t.format("%Y-%m-%d %H:%M").to_string()),
+                status: match r.9.as_deref() {
+                    Some("diterima") => StatusTransfer::Diterima,
+                    Some("ditolak") | Some("dibatalkan") => StatusTransfer::Ditolak,
+                    _ => StatusTransfer::Pending,
+                },
             })
             .collect(),
         Err(_) => Vec::new(),
@@ -462,6 +481,52 @@ pub async fn create_transfer_stok(
     };
     let owner_id = claims.owner_id;
     let user_id = claims.user_id;
+
+    if payload.unit_asal_id == payload.unit_tujuan_id {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<TransferStokModel> {
+                status: "error".to_string(),
+                message: "Unit asal dan unit tujuan transfer tidak boleh sama.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
+
+    if payload.jumlah <= 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<TransferStokModel> {
+                status: "error".to_string(),
+                message: "Jumlah transfer harus lebih besar dari 0.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
+
+    // Verifikasi produk milik owner ini
+    let produk_valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM products WHERE id = $1 AND owner_id = $2)",
+    )
+    .bind(payload.produk_id as i32)
+    .bind(owner_id as i32)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(false);
+
+    if !produk_valid {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<TransferStokModel> {
+                status: "error".to_string(),
+                message: "Produk yang dipilih tidak ditemukan atau bukan milik bisnis Anda.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
 
     // Verifikasi unit_asal dan unit_tujuan milik owner_id ini
     let asal_valid: bool = sqlx::query_scalar(
@@ -594,11 +659,35 @@ pub async fn update_status_transfer(
         )
             .into_response();
     }
+    let status_str = match payload.status {
+        StatusTransfer::Diterima => "diterima",
+        StatusTransfer::Ditolak => "ditolak",
+        StatusTransfer::Pending => "pending",
+    };
+
+    let waktu_terima_sql = if payload.status == StatusTransfer::Diterima {
+        "now()"
+    } else {
+        "NULL"
+    };
+
+    let sql = format!(
+        "UPDATE stock_movements 
+         SET status = $1, waktu_terima = {} 
+         WHERE id = $2",
+        waktu_terima_sql
+    );
+    let _ = sqlx::query(&sql)
+        .bind(status_str)
+        .bind(id as i32)
+        .execute(&state.db)
+        .await;
+
     (
         StatusCode::OK,
         Json(ApiResponse::<()> {
             status: "success".to_string(),
-            message: format!("Status transfer #{} dikonfirmasi: {:?}", id, payload.status),
+            message: format!("Status transfer #{} diperbarui ke: {}", id, status_str),
             data: None,
         }),
     )

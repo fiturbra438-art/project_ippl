@@ -234,19 +234,42 @@ pub async fn chat_ai(
 // 2. FORECASTING DEMAND PENJUALAN (Dihitung Dinamis dari Histori Transaksi Riil PostgreSQL)
 pub async fn get_forecast(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Path(unit_id): Path<i64>,
 ) -> impl IntoResponse {
-    let nama_unit: String = sqlx::query_scalar("SELECT nama FROM business_units WHERE id = $1")
-        .bind(unit_id as i32)
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "Unit Usaha".to_string());
+    let claims = match require_claims(&headers, &state.jwt_secret) {
+        Ok(c) => c,
+        Err(err) => return err.into_response(),
+    };
+    let owner_id = claims.owner_id;
 
-    // Hitung rata-rata penjualan harian riil dari tabel transactions di PostgreSQL
+    // Verifikasi unit_id milik bisnis pengguna
+    let nama_unit: Option<String> = sqlx::query_scalar(
+        "SELECT nama FROM business_units WHERE id = $1 AND owner_id = $2",
+    )
+    .bind(unit_id as i32)
+    .bind(owner_id as i32)
+    .fetch_optional(&state.db)
+    .await
+    .unwrap_or(None);
+
+    let Some(nama_unit) = nama_unit else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<ForecastResponse> {
+                status: "error".to_string(),
+                message: "Unit usaha tidak ditemukan atau bukan milik bisnis Anda.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    };
+
+    // Hitung rata-rata penjualan HARIAN riil (total per hari dibagi jumlah hari aktif transaksi)
     let avg_omzet_decimal: Option<rust_decimal::Decimal> = sqlx::query_scalar(
-        "SELECT COALESCE(AVG(total), 0) FROM transactions WHERE unit_id = $1 AND status = 'selesai'"
+        "SELECT COALESCE(SUM(total) / GREATEST(COUNT(DISTINCT tanggal::date), 1), 0)
+         FROM transactions
+         WHERE unit_id = $1 AND status = 'selesai'",
     )
     .bind(unit_id as i32)
     .fetch_optional(&state.db)
@@ -256,7 +279,7 @@ pub async fn get_forecast(
     let baseline = avg_omzet_decimal
         .and_then(|d| d.to_f64())
         .filter(|&v| v > 0.0)
-        .unwrap_or(150000.0); // Baseline dinamis atau estimasi awal
+        .unwrap_or(0.0);
 
     let mut proyeksi: Vec<ForecastPoint> = Vec::new();
     let today = Local::now().date_naive();

@@ -73,9 +73,10 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Fungsi B: Hitung Total Keranjang Belanja dari JSON Item
+-- Fungsi B: Hitung Total Keranjang Belanja dari JSON Item (Termasuk Diskon Item & Transaksi)
 CREATE OR REPLACE FUNCTION fn_hitung_total_belanja(
-    p_items JSONB
+    p_items JSONB,
+    p_diskon_transaksi NUMERIC DEFAULT 0
 ) RETURNS NUMERIC(14,2) AS $$
 DECLARE
     item JSONB;
@@ -84,10 +85,16 @@ DECLARE
 BEGIN
     FOR item IN SELECT * FROM jsonb_array_elements(p_items)
     LOOP
-        v_subtotal := (item->>'harga_satuan')::NUMERIC * (item->>'qty')::INT;
+        -- Subtotal = harga satuan * qty - diskon item (tidak boleh negatif)
+        v_subtotal := ((item->>'harga_satuan')::NUMERIC * (item->>'qty')::INT)
+                      - COALESCE((item->>'diskon')::NUMERIC, 0);
+        IF v_subtotal < 0 THEN
+            v_subtotal := 0;
+        END IF;
         v_total := v_total + v_subtotal;
     END LOOP;
-    RETURN v_total;
+    -- Kurangi diskon tingkat transaksi, lalu jaga agar total tidak negatif
+    RETURN GREATEST(v_total - COALESCE(p_diskon_transaksi, 0), 0);
 END;
 $$ LANGUAGE plpgsql;
 
@@ -103,8 +110,13 @@ DECLARE
     v_unit_id INT;
     v_inv_id INT;
 BEGIN
-    -- Jika product_id NULL atau 0 (item non-stok / jasa / rental / ad-hoc), lewati pengurangan inventori fisik
+    -- Jika product_id NULL/0 atau item bertipe 'jasa' (non-inventori), lewati pengurangan stok.
+    -- Item 'barang' maupun 'rental' tetap mengurangi stok fisik karena aset keluar dari gudang.
     IF NEW.product_id IS NULL OR NEW.product_id <= 0 THEN
+        RETURN NEW;
+    END IF;
+
+    IF LOWER(COALESCE(NEW.item_type, 'barang')) = 'jasa' THEN
         RETURN NEW;
     END IF;
 
@@ -163,6 +175,10 @@ CREATE OR REPLACE PROCEDURE sp_proses_checkout_kasir(
     IN p_kasir_id INT,
     IN p_metode_bayar VARCHAR,
     IN p_items JSONB,
+    IN p_customer_name VARCHAR,
+    IN p_notes TEXT,
+    IN p_operation_mode VARCHAR,
+    IN p_diskon_nominal NUMERIC,
     OUT p_trx_id INT,
     OUT p_total_bayar NUMERIC(14,2),
     OUT p_status_out VARCHAR,
@@ -174,6 +190,7 @@ DECLARE
     v_prod_id INT;
     v_qty INT;
     v_harga NUMERIC(14,2);
+    v_diskon_item NUMERIC(14,2);
     v_subtotal NUMERIC(14,2);
     v_unit_ada BOOLEAN;
     v_is_tunai BOOLEAN;
@@ -191,15 +208,15 @@ BEGIN
         RETURN;
     END IF;
 
-    -- 2. Validasi Ketersediaan Stok (Hanya untuk item barang fisik yang memiliki product_id valid > 0)
+    -- 2. Validasi Ketersediaan Stok (barang fisik & aset rental yang memiliki product_id valid > 0)
     FOR item IN SELECT * FROM jsonb_array_elements(p_items)
     LOOP
         v_prod_id := COALESCE((item->>'product_id')::INT, 0);
         v_qty := COALESCE((item->>'qty')::INT, 1);
         v_tipe := COALESCE(item->>'tipe', 'barang');
         
-        -- Hanya cek stok jika item bertipe 'barang' dan memiliki product_id fisik
-        IF v_prod_id > 0 AND LOWER(v_tipe) = 'barang' THEN
+        -- Cek stok untuk item 'barang' dan 'rental' (aset fisik keluar dari gudang)
+        IF v_prod_id > 0 AND LOWER(v_tipe) IN ('barang', 'rental') THEN
             IF NOT fn_cek_ketersediaan_stok(p_unit_id, v_prod_id, v_qty) THEN
                 p_status_out := 'error';
                 p_pesan_out := 'Gagal: Stok untuk produk ID #' || v_prod_id || ' tidak mencukupi!';
@@ -208,12 +225,20 @@ BEGIN
         END IF;
     END LOOP;
 
-    -- 3. Hitung Total Pembelian via FUNCTION fn_hitung_total_belanja
-    p_total_bayar := fn_hitung_total_belanja(p_items);
+    -- 3. Hitung Total Pembelian via FUNCTION fn_hitung_total_belanja (termasuk diskon)
+    p_total_bayar := fn_hitung_total_belanja(p_items, COALESCE(p_diskon_nominal, 0));
 
     -- 4. Buat Master Transaksi (Memicu TRIGGER trg_update_omzet_unit)
-    INSERT INTO transactions (unit_id, kasir_id, tanggal, total, metode_bayar, status, created_at)
-    VALUES (p_unit_id, p_kasir_id, now(), p_total_bayar, p_metode_bayar, 'selesai', now())
+    INSERT INTO transactions (
+        unit_id, kasir_id, tanggal, total, metode_bayar, status,
+        customer_name, notes, operation_mode, created_at
+    ) VALUES (
+        p_unit_id, p_kasir_id, now(), p_total_bayar, p_metode_bayar, 'selesai',
+        NULLIF(BTRIM(COALESCE(p_customer_name, '')), ''),
+        NULLIF(BTRIM(COALESCE(p_notes, '')), ''),
+        COALESCE(NULLIF(BTRIM(p_operation_mode), ''), 'fleksibel'),
+        now()
+    )
     RETURNING id INTO p_trx_id;
 
     -- 5. Masukkan Detail Item (Mendukung Produk Fisik, Rental, Jasa, atau Custom)
@@ -222,7 +247,8 @@ BEGIN
         v_prod_id := NULLIF(COALESCE((item->>'product_id')::INT, 0), 0);
         v_qty := COALESCE((item->>'qty')::INT, 1);
         v_harga := (item->>'harga_satuan')::NUMERIC;
-        v_subtotal := v_harga * v_qty;
+        v_diskon_item := COALESCE((item->>'diskon')::NUMERIC, 0);
+        v_subtotal := GREATEST((v_harga * v_qty) - v_diskon_item, 0);
         v_tipe := COALESCE(item->>'tipe', 'barang');
         v_custom_nama := item->>'nama';
         v_durasi := COALESCE((item->>'durasi')::INT, 1);
@@ -230,7 +256,7 @@ BEGIN
         v_catatan := item->>'catatan';
 
         INSERT INTO transaction_items (
-            trx_id, product_id, item_name, item_type, qty, harga_satuan, subtotal, rental_duration, duration_unit, notes, created_at
+            trx_id, product_id, item_name, item_type, qty, harga_satuan, diskon, subtotal, rental_duration, duration_unit, notes, created_at
         ) VALUES (
             p_trx_id, 
             v_prod_id, 
@@ -238,6 +264,7 @@ BEGIN
             v_tipe, 
             v_qty, 
             v_harga, 
+            v_diskon_item,
             v_subtotal, 
             v_durasi, 
             v_unit_durasi, 
@@ -249,21 +276,24 @@ BEGIN
         IF LOWER(v_tipe) = 'rental' THEN
             INSERT INTO rental_service_orders (
                 trx_id, unit_id, product_id, item_name, order_type, customer_name,
-                start_time, expected_end_time, duration, duration_unit, status, notes, created_at
+                start_time, expected_end_time, duration, duration_unit, qty, status, notes, created_at
             ) VALUES (
                 p_trx_id,
                 p_unit_id,
                 v_prod_id,
                 COALESCE(v_custom_nama, 'Barang Sewa'),
                 'rental',
-                (SELECT customer_name FROM transactions WHERE id = p_trx_id),
+                NULLIF(BTRIM(COALESCE(p_customer_name, '')), ''),
                 now(),
                 CASE 
                     WHEN LOWER(v_unit_durasi) = 'hari' THEN now() + (v_durasi || ' days')::INTERVAL
+                    WHEN LOWER(v_unit_durasi) = 'minggu' THEN now() + (v_durasi || ' weeks')::INTERVAL
+                    WHEN LOWER(v_unit_durasi) = 'menit' THEN now() + (v_durasi || ' minutes')::INTERVAL
                     ELSE now() + (v_durasi || ' hours')::INTERVAL
                 END,
                 v_durasi,
                 COALESCE(v_unit_durasi, 'jam'),
+                v_qty,
                 'active',
                 v_catatan,
                 now()
@@ -271,18 +301,19 @@ BEGIN
         ELSIF LOWER(v_tipe) = 'jasa' THEN
             INSERT INTO rental_service_orders (
                 trx_id, unit_id, product_id, item_name, order_type, customer_name,
-                start_time, expected_end_time, duration, duration_unit, status, notes, created_at
+                start_time, expected_end_time, duration, duration_unit, qty, status, notes, created_at
             ) VALUES (
                 p_trx_id,
                 p_unit_id,
                 v_prod_id,
                 COALESCE(v_custom_nama, 'Layanan Jasa'),
                 'service',
-                (SELECT customer_name FROM transactions WHERE id = p_trx_id),
+                NULLIF(BTRIM(COALESCE(p_customer_name, '')), ''),
                 now(),
                 now() + (v_durasi || ' hours')::INTERVAL,
                 v_durasi,
                 COALESCE(v_unit_durasi, 'jam'),
+                v_qty,
                 'in_progress',
                 v_catatan,
                 now()
@@ -441,6 +472,7 @@ CREATE TABLE IF NOT EXISTS rental_service_orders (
     actual_end_time TIMESTAMP,
     duration INT NOT NULL DEFAULT 1,
     duration_unit VARCHAR(20) NOT NULL DEFAULT 'jam',
+    qty INT NOT NULL DEFAULT 1,
     status VARCHAR(30) NOT NULL, -- Rental: 'active', 'returned', 'overdue' | Jasa: 'queued', 'in_progress', 'ready', 'completed'
     assigned_staff VARCHAR(100),
     deposit_amount NUMERIC(14,2) DEFAULT 0,

@@ -68,6 +68,20 @@ pub fn extract_claims(headers: &axum::http::HeaderMap, secret: &str) -> Option<C
     None
 }
 
+// Perbandingan waktu-konstan untuk mencegah timing attack pada kode OTP.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 // Strict Auth Extractor: Menolak semua request tanpa token JWT yang sah
 pub fn require_claims(
     headers: &axum::http::HeaderMap,
@@ -255,17 +269,28 @@ pub async fn login_owner(
         let otp_code = crate::email::generate_dynamic_otp();
         let expires_at = Utc::now() + Duration::minutes(5);
 
-        // Simpan OTP dan masa kedaluwarsa ke database PostgreSQL
-        let _ = sqlx::query(
-            "UPDATE users 
-             SET otp_code = $1, otp_expires_at = $2 
-             WHERE id = $3"
+        // Simpan OTP, reset penghitung percobaan, dan masa kedaluwarsa
+        if let Err(e) = sqlx::query(
+            "UPDATE users
+             SET otp_code = $1, otp_expires_at = $2, otp_attempts = 0
+             WHERE id = $3",
         )
         .bind(&otp_code)
         .bind(expires_at.naive_utc())
         .bind(owner.0)
         .execute(&state.db)
-        .await;
+        .await
+        {
+            tracing::error!("Gagal menyimpan OTP untuk owner #{}: {}", owner.0, e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<serde_json::Value> {
+                    status: "error".to_string(),
+                    message: "Gagal membuat kode OTP. Silakan coba lagi.".to_string(),
+                    data: None,
+                }),
+            );
+        }
 
         // Kirimkan OTP ke email Owner secara asynchronous
         let email_owner = owner.2.clone();
@@ -290,15 +315,34 @@ pub async fn login_owner(
         );
     }
 
-    let token = generate_token(
+    let paket_str = owner.4.clone().unwrap_or_else(|| "free".to_string());
+    let paket_enum = match paket_str.as_str() {
+        "enterprise" => PaketLangganan::Enterprise,
+        "pro" => PaketLangganan::Pro,
+        _ => PaketLangganan::Free,
+    };
+
+    let token = match generate_token(
         &owner.2,
         owner.0 as i64,
         "owner",
         owner.0 as i64,
-        Some(owner.4.clone().unwrap_or_else(|| "pro".to_string())),
+        Some(paket_str),
         &state.jwt_secret,
-    )
-    .unwrap_or_default();
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("Gagal membuat token login owner: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<serde_json::Value> {
+                    status: "error".to_string(),
+                    message: "Gagal membuat sesi login. Silakan coba lagi.".to_string(),
+                    data: None,
+                }),
+            );
+        }
+    };
 
     (
         StatusCode::OK,
@@ -311,7 +355,7 @@ pub async fn login_owner(
                 nama: owner.1,
                 email: owner.2,
                 nama_bisnis: owner.8.unwrap_or_else(|| "Grup Bisnis".to_string()),
-                paket: PaketLangganan::Pro,
+                paket: paket_enum,
                 kuota_unit_usaha: owner.6.unwrap_or(5),
                 sisa_kuota_ai: owner.7.unwrap_or(250),
             }) {
@@ -356,11 +400,12 @@ pub async fn verify_owner_2fa(
     let owner = match owner_row {
         Ok(Some(o)) => o,
         _ => {
+            // Jangan bocorkan keberadaan akun (anti-enumeration)
             return (
-                StatusCode::NOT_FOUND,
+                StatusCode::UNAUTHORIZED,
                 Json(ApiResponse::<OwnerAuthResponse> {
                     status: "error".to_string(),
-                    message: "Akun owner tidak ditemukan di database.".to_string(),
+                    message: "Email atau kata sandi Owner tidak cocok.".to_string(),
                     data: None,
                 }),
             );
@@ -378,33 +423,47 @@ pub async fn verify_owner_2fa(
         );
     }
 
-    // Ambil data OTP dinamis dan masa kedaluwarsa dari PostgreSQL
-    let otp_row = sqlx::query_as::<_, (Option<String>, Option<chrono::NaiveDateTime>)>(
-        "SELECT otp_code, otp_expires_at FROM users WHERE id = $1"
+    // Ambil data OTP dinamis, masa kedaluwarsa, dan jumlah percobaan dari PostgreSQL
+    let otp_row = sqlx::query_as::<_, (Option<String>, Option<chrono::NaiveDateTime>, Option<i32>)>(
+        "SELECT otp_code, otp_expires_at, otp_attempts FROM users WHERE id = $1",
     )
     .bind(owner.0)
     .fetch_optional(&state.db)
     .await
     .unwrap_or(None);
 
-    let (db_otp, db_expires) = match otp_row {
-        Some((Some(code), Some(exp))) => (code, exp),
+    // Tidak ada fallback ke secret statis: OTP harus berasal dari login terbaru.
+    let (db_otp, db_expires, attempts) = match otp_row {
+        Some((Some(code), Some(exp), attempts)) => (code, exp, attempts.unwrap_or(0)),
         _ => {
-            // Fallback ke secret_2fa statis jika ada (misal setup awal)
-            if let Some(sec) = owner.5.as_ref() {
-                (sec.clone(), Utc::now().naive_utc() + chrono::Duration::hours(24))
-            } else {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(ApiResponse::<OwnerAuthResponse> {
-                        status: "error".to_string(),
-                        message: "Tidak ada kode OTP aktif. Silakan login ulang untuk mendapatkan kode OTP baru.".to_string(),
-                        data: None,
-                    }),
-                );
-            }
+            return (
+                StatusCode::FORBIDDEN,
+                Json(ApiResponse::<OwnerAuthResponse> {
+                    status: "error".to_string(),
+                    message: "Tidak ada kode OTP aktif. Silakan login ulang untuk mendapatkan kode OTP baru.".to_string(),
+                    data: None,
+                }),
+            );
         }
     };
+
+    const MAX_OTP_ATTEMPTS: i32 = 5;
+    if attempts >= MAX_OTP_ATTEMPTS {
+        let _ = sqlx::query(
+            "UPDATE users SET otp_code = NULL, otp_expires_at = NULL WHERE id = $1",
+        )
+        .bind(owner.0)
+        .execute(&state.db)
+        .await;
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiResponse::<OwnerAuthResponse> {
+                status: "error".to_string(),
+                message: "Terlalu banyak percobaan kode OTP. Silakan login ulang untuk meminta kode baru.".to_string(),
+                data: None,
+            }),
+        );
+    }
 
     // Validasi kedaluwarsa OTP (5 menit)
     if Utc::now().naive_utc() > db_expires {
@@ -418,34 +477,77 @@ pub async fn verify_owner_2fa(
         );
     }
 
-    // Validasi kecocokan kode OTP
-    if payload.code_otp.trim() != db_otp.trim() {
+    // Validasi kecocokan kode OTP dengan perbandingan waktu-konstan
+    if !constant_time_eq(payload.code_otp.trim(), db_otp.trim()) {
+        let new_attempts = attempts + 1;
+        if new_attempts >= MAX_OTP_ATTEMPTS {
+            // Kunci OTP setelah batas percobaan tercapai
+            let _ = sqlx::query(
+                "UPDATE users SET otp_code = NULL, otp_expires_at = NULL, otp_attempts = $1 WHERE id = $2",
+            )
+            .bind(new_attempts)
+            .bind(owner.0)
+            .execute(&state.db)
+            .await;
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(ApiResponse::<OwnerAuthResponse> {
+                    status: "error".to_string(),
+                    message: "Terlalu banyak percobaan kode OTP. Silakan login ulang untuk meminta kode baru.".to_string(),
+                    data: None,
+                }),
+            );
+        }
+
+        let _ = sqlx::query("UPDATE users SET otp_attempts = $1 WHERE id = $2")
+            .bind(new_attempts)
+            .bind(owner.0)
+            .execute(&state.db)
+            .await;
+
         return (
             StatusCode::UNAUTHORIZED,
             Json(ApiResponse::<OwnerAuthResponse> {
                 status: "error".to_string(),
-                message: "Kode OTP tidak cocok. Silakan periksa kembali email Anda.".to_string(),
+                message: format!(
+                    "Kode OTP tidak cocok. Sisa percobaan: {}.",
+                    MAX_OTP_ATTEMPTS - new_attempts
+                ),
                 data: None,
             }),
         );
     }
 
     // Hanguskan OTP setelah berhasil dipakai (mencegah replay attack)
-    let _ = sqlx::query("UPDATE users SET otp_code = NULL, otp_expires_at = NULL WHERE id = $1")
-        .bind(owner.0)
-        .execute(&state.db)
-        .await;
+    let _ = sqlx::query(
+        "UPDATE users SET otp_code = NULL, otp_expires_at = NULL, otp_attempts = 0 WHERE id = $1",
+    )
+    .bind(owner.0)
+    .execute(&state.db)
+    .await;
 
-    let paket_str = owner.4.clone().unwrap_or_else(|| "pro".to_string());
-    let token = generate_token(
+    let paket_str = owner.4.clone().unwrap_or_else(|| "free".to_string());
+    let token = match generate_token(
         &owner.2,
         owner.0 as i64,
         "owner",
         owner.0 as i64,
         Some(paket_str.clone()),
         &state.jwt_secret,
-    )
-    .unwrap_or_default();
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("Gagal membuat token 2FA owner: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<OwnerAuthResponse> {
+                    status: "error".to_string(),
+                    message: "Gagal membuat sesi login. Silakan coba lagi.".to_string(),
+                    data: None,
+                }),
+            );
+        }
+    };
 
     let paket_enum = match paket_str.as_str() {
         "enterprise" => PaketLangganan::Enterprise,
@@ -659,15 +761,27 @@ pub async fn login_karyawan(
         }
     };
 
-    let token = generate_token(
+    let token = match generate_token(
         &karyawan.3,
         karyawan.0 as i64,
         &karyawan.5,
         target_owner_id,
         None,
         &state.jwt_secret,
-    )
-    .unwrap_or_default();
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("Gagal membuat token login karyawan: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<KaryawanAuthResponse> {
+                    status: "error".to_string(),
+                    message: "Gagal membuat sesi login. Silakan coba lagi.".to_string(),
+                    data: None,
+                }),
+            );
+        }
+    };
 
     (
         StatusCode::OK,

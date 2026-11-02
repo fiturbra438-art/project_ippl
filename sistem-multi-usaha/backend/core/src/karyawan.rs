@@ -159,6 +159,7 @@ pub async fn create_karyawan(
     let user_id = match user_row {
         Ok(r) => r.0,
         Err(e) => {
+            tracing::error!("Gagal mendaftarkan karyawan: {}", e);
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ApiResponse::<KaryawanAccount> {
@@ -244,17 +245,19 @@ pub async fn update_karyawan(
     }
 
     // Pastikan user adalah karyawan milik owner_id ini
-    let exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1 AND owner_id = $2)")
-            .bind(id as i32)
-            .bind(owner_id as i32)
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or(false);
+    // Periksa keberadaan karyawan dan perannya
+    let target_role: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM users WHERE id = $1 AND owner_id = $2 AND role != 'owner'",
+    )
+    .bind(id as i32)
+    .bind(owner_id as i32)
+    .fetch_optional(&state.db)
+    .await
+    .unwrap_or(None);
 
-    if !exists {
+    let Some(target_role) = target_role else {
         return (
-            StatusCode::FORBIDDEN,
+            StatusCode::NOT_FOUND,
             Json(ApiResponse::<()> {
                 status: "error".to_string(),
                 message: "Karyawan tidak ditemukan atau Anda tidak memiliki hak akses.".to_string(),
@@ -262,6 +265,34 @@ pub async fn update_karyawan(
             }),
         )
             .into_response();
+    };
+
+    // Manager tidak boleh mengubah sesama Manager dan tidak boleh mengangkat user menjadi Manager
+    if claims.role == "manager" {
+        if target_role == "manager" {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(ApiResponse::<()> {
+                    status: "error".to_string(),
+                    message: "Manager tidak berwenang mengedit akun Manager lain.".to_string(),
+                    data: None,
+                }),
+            )
+                .into_response();
+        }
+        if let Some(peran) = &payload.peran {
+            if matches!(peran, PeranPengguna::Manager) {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(ApiResponse::<()> {
+                        status: "error".to_string(),
+                        message: "Manager tidak dapat menaikkan jabatan menjadi Manager.".to_string(),
+                        data: None,
+                    }),
+                )
+                    .into_response();
+            }
+        }
     }
 
     if let Some(nama) = &payload.nama {
@@ -345,31 +376,74 @@ pub async fn delete_karyawan(
     };
     let owner_id = claims.owner_id;
 
+    // Periksa target sebelum menghapus
+    let target_role: Option<String> = sqlx::query_scalar(
+        "SELECT role FROM users WHERE id = $1 AND owner_id = $2 AND role != 'owner'",
+    )
+    .bind(id as i32)
+    .bind(owner_id as i32)
+    .fetch_optional(&state.db)
+    .await
+    .unwrap_or(None);
+
+    let Some(target_role) = target_role else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<()> {
+                status: "error".to_string(),
+                message: "Karyawan tidak ditemukan atau Anda tidak memiliki hak akses.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    };
+
+    if claims.role == "manager" && target_role == "manager" {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<()> {
+                status: "error".to_string(),
+                message: "Manager tidak berwenang menghapus sesama Manager.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
+
     let res = sqlx::query("DELETE FROM users WHERE id = $1 AND role != 'owner' AND owner_id = $2")
         .bind(id as i32)
         .bind(owner_id as i32)
         .execute(&state.db)
         .await;
 
-    if matches!(res, Ok(ref result) if result.rows_affected() > 0) {
-        let _ = sqlx::query("DELETE FROM user_units WHERE user_id = $1")
-            .bind(id as i32)
-            .execute(&state.db)
-            .await;
-    }
-
     match res {
+        Ok(result) if result.rows_affected() > 0 => {
+            let _ = sqlx::query("DELETE FROM user_units WHERE user_id = $1")
+                .bind(id as i32)
+                .execute(&state.db)
+                .await;
+
+            (
+                StatusCode::OK,
+                Json(ApiResponse::<()> {
+                    status: "success".to_string(),
+                    message: format!("Akun karyawan #{} berhasil dihapus dari database.", id),
+                    data: None,
+                }),
+            )
+                .into_response()
+        }
         Ok(_) => (
-            StatusCode::OK,
+            StatusCode::NOT_FOUND,
             Json(ApiResponse::<()> {
-                status: "success".to_string(),
-                message: format!("Akun karyawan #{} berhasil dihapus dari database.", id),
+                status: "error".to_string(),
+                message: "Akun karyawan tidak ditemukan atau sudah dihapus.".to_string(),
                 data: None,
             }),
         )
             .into_response(),
         Err(e) => (
-            StatusCode::BAD_REQUEST,
+            StatusCode::INTERNAL_SERVER_ERROR,
             Json(ApiResponse::<()> {
                 status: "error".to_string(),
                 message: format!("Gagal menghapus karyawan: {}", e),

@@ -44,11 +44,11 @@ pub async fn list_produk(
         .await
     } else {
         sqlx::query_as::<_, (i32, i32, i32, String, String, rust_decimal::Decimal, rust_decimal::Decimal, i32, i32)>(
-            "SELECT p.id, p.owner_id, COALESCE(i.unit_id, 1), p.nama, p.sku, p.harga_beli, p.harga_jual, COALESCE(i.qty, 0), COALESCE(i.min_stock, 5)
+            "SELECT DISTINCT ON (p.id) p.id, p.owner_id, COALESCE(i.unit_id, 1), p.nama, p.sku, p.harga_beli, p.harga_jual, COALESCE(i.qty, 0), COALESCE(i.min_stock, 5)
              FROM products p
              LEFT JOIN inventories i ON p.id = i.product_id
              WHERE p.owner_id = $1
-             ORDER BY p.id ASC"
+             ORDER BY p.id ASC, i.unit_id ASC"
         )
         .bind(owner_id as i32)
         .fetch_all(&state.db)
@@ -236,6 +236,31 @@ pub async fn create_produk(
                 data: None,
             }),
         ).into_response();
+    }
+
+    if payload.nama.trim().is_empty() || payload.sku.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<ProdukModel> {
+                status: "error".to_string(),
+                message: "Nama produk dan SKU wajib diisi.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
+
+    if payload.harga_beli < 0.0 || payload.harga_jual < 0.0 || payload.stok < 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<ProdukModel> {
+                status: "error".to_string(),
+                message: "Harga beli, harga jual, dan stok awal tidak boleh bernilai negatif."
+                    .to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
     }
 
     let min_stock = payload.min_stok.unwrap_or(5);

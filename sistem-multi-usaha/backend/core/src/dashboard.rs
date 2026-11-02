@@ -125,10 +125,27 @@ pub async fn get_dashboard_summary(
         .fetch_optional(&state.db)
         .await
         .unwrap_or(None);
-        let pendapatan = p_decimal.and_then(|d| d.to_f64()).unwrap_or(0.0);
+        let pendapatan_pos = p_decimal.and_then(|d| d.to_f64()).unwrap_or(0.0);
 
-        // Pengeluaran operasional (default atau dari cash_flows jika ada)
-        let pengeluaran = 0.0;
+        // Pendapatan & pengeluaran manual dari tabel cash_flows
+        let cash_masuk: Option<rust_decimal::Decimal> = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(jumlah), 0) FROM cash_flows WHERE unit_id = $1 AND jenis = 'masuk'",
+        )
+        .bind(u.0)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
+        let cash_keluar: Option<rust_decimal::Decimal> = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(jumlah), 0) FROM cash_flows WHERE unit_id = $1 AND jenis = 'keluar'",
+        )
+        .bind(u.0)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
+
+        let pendapatan =
+            pendapatan_pos + cash_masuk.and_then(|d| d.to_f64()).unwrap_or(0.0);
+        let pengeluaran = cash_keluar.and_then(|d| d.to_f64()).unwrap_or(0.0);
         let laba = pendapatan - pengeluaran;
         let margin = if pendapatan > 0.0 {
             (laba / pendapatan) * 100.0
@@ -236,9 +253,35 @@ pub async fn get_laporan_keuangan(
         .await
     };
 
+    // Mutasi manual dari cash_flows (masuk & keluar)
+    let cash_rows = if let Some(uid) = query.unit_id {
+        sqlx::query_as::<_, (String, String, rust_decimal::Decimal)>(
+            "SELECT c.jenis, c.kategori, c.jumlah
+             FROM cash_flows c
+             JOIN business_units u ON u.id = c.unit_id
+             WHERE u.owner_id = $1 AND c.unit_id = $2",
+        )
+        .bind(owner_id as i32)
+        .bind(uid as i32)
+        .fetch_all(&state.db)
+        .await
+    } else {
+        sqlx::query_as::<_, (String, String, rust_decimal::Decimal)>(
+            "SELECT c.jenis, c.kategori, c.jumlah
+             FROM cash_flows c
+             JOIN business_units u ON u.id = c.unit_id
+             WHERE u.owner_id = $1",
+        )
+        .bind(owner_id as i32)
+        .fetch_all(&state.db)
+        .await
+    };
+
     let mut total_pemasukan = 0.0;
+    let mut total_pengeluaran = 0.0;
     use std::collections::HashMap;
     let mut map_pemasukan: HashMap<String, f64> = HashMap::new();
+    let mut map_pengeluaran: HashMap<String, f64> = HashMap::new();
 
     if let Ok(trxs) = rows {
         for (total_dec, metode) in trxs {
@@ -250,17 +293,34 @@ pub async fn get_laporan_keuangan(
         }
     }
 
+    if let Ok(list) = cash_rows {
+        for (jenis, kategori, jumlah) in list {
+            let jml = jumlah.to_f64().unwrap_or(0.0);
+            if jenis.eq_ignore_ascii_case("masuk") {
+                total_pemasukan += jml;
+                *map_pemasukan.entry(kategori).or_insert(0.0) += jml;
+            } else {
+                total_pengeluaran += jml;
+                *map_pengeluaran.entry(kategori).or_insert(0.0) += jml;
+            }
+        }
+    }
+
     let rincian_pemasukan_per_kategori: Vec<KategoriSummary> = map_pemasukan
+        .into_iter()
+        .map(|(kategori, total)| KategoriSummary { kategori, total })
+        .collect();
+    let rincian_pengeluaran_per_kategori: Vec<KategoriSummary> = map_pengeluaran
         .into_iter()
         .map(|(kategori, total)| KategoriSummary { kategori, total })
         .collect();
 
     let res = LaporanKeuanganResponse {
         total_pemasukan,
-        total_pengeluaran: 0.0,
-        arus_kas_bersih: total_pemasukan,
+        total_pengeluaran,
+        arus_kas_bersih: total_pemasukan - total_pengeluaran,
         rincian_pemasukan_per_kategori,
-        rincian_pengeluaran_per_kategori: Vec::new(),
+        rincian_pengeluaran_per_kategori,
     };
 
     (
