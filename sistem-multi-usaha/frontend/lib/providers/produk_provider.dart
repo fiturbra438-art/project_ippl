@@ -3,8 +3,9 @@ import '../models/produk.dart';
 import '../services/api_service.dart';
 
 class ProdukProvider extends ChangeNotifier {
-  // Data bersih awal (0 produk katalog)
-  final List<ProdukModel> _daftarProduk = [];
+  // Data produk yang disinkronkan langsung dari PostgreSQL backend
+  List<ProdukModel> _daftarProduk = [];
+  bool _isLoading = false;
 
   int _selectedUnitFilter = 0; // 0 = Semua
   String _searchQuery = '';
@@ -18,7 +19,34 @@ class ProdukProvider extends ChangeNotifier {
     }).toList();
   }
 
+  bool get isLoading => _isLoading;
   int get selectedUnitFilter => _selectedUnitFilter;
+
+  Future<void> fetchProdukFromApi({int? unitId}) async {
+    _isLoading = true;
+    notifyListeners();
+    try {
+      final endpoint = (unitId != null && unitId > 0) ? '/produk?unit_id=$unitId' : '/produk';
+      final res = await ApiService.get(endpoint);
+      if (res != null && res['status'] == 'success' && res['data'] != null) {
+        final list = res['data'] as List;
+        _daftarProduk = list.map((item) {
+          return ProdukModel(
+            id: (item['id'] as num).toInt(),
+            unitId: (item['unit_id'] as num).toInt(),
+            nama: item['nama'] as String? ?? '',
+            sku: item['sku'] as String? ?? '',
+            hargaBeli: (item['harga_beli'] as num?)?.toDouble() ?? 0.0,
+            hargaJual: (item['harga_jual'] as num?)?.toDouble() ?? 0.0,
+            stok: (item['stok'] as num?)?.toInt() ?? 0,
+            minStok: (item['min_stok'] as num?)?.toInt() ?? 5,
+          );
+        }).toList();
+      }
+    } catch (_) {}
+    _isLoading = false;
+    notifyListeners();
+  }
 
   void setUnitFilter(int unitId) {
     _selectedUnitFilter = unitId;

@@ -96,11 +96,15 @@ pub enum JenisTransaksi {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ItemCheckout {
-    pub produk_id: i64,
+    pub produk_id: Option<i64>,
     pub nama_produk: String,
+    pub tipe: Option<String>, // 'barang', 'rental', 'jasa'
     pub harga_satuan: f64,
     pub jumlah: i32,
     pub subtotal: f64,
+    pub durasi: Option<i32>,
+    pub unit_durasi: Option<String>,
+    pub catatan: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,6 +142,28 @@ pub struct ShiftKasirModel {
     pub waktu_buka: String,
     pub waktu_tutup: Option<String>,
     pub status: StatusShift,
+}
+
+// ==================== LIFECYCLE ORDER RENTAL & JASA ====================
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RentalServiceOrderModel {
+    pub id: i64,
+    pub trx_id: i64,
+    pub unit_id: i64,
+    pub product_id: Option<i64>,
+    pub item_name: String,
+    pub order_type: String, // 'rental', 'service'
+    pub customer_name: Option<String>,
+    pub start_time: String,
+    pub expected_end_time: String,
+    pub actual_end_time: Option<String>,
+    pub duration: i32,
+    pub duration_unit: String,
+    pub status: String, // 'active', 'returned', 'overdue', 'queued', 'in_progress', 'ready', 'completed'
+    pub assigned_staff: Option<String>,
+    pub deposit_amount: f64,
+    pub penalty_fee: f64,
+    pub notes: Option<String>,
 }
 
 // ==================== MODUL GUDANG & PERMINTAAN STOK ====================

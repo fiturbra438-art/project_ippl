@@ -13,8 +13,21 @@ import 'portofolio_screen.dart';
 import 'forecast_screen.dart';
 import 'chat_ai_screen.dart';
 
-class LaporanScreen extends StatelessWidget {
+class LaporanScreen extends StatefulWidget {
   const LaporanScreen({super.key});
+
+  @override
+  State<LaporanScreen> createState() => _LaporanScreenState();
+}
+
+class _LaporanScreenState extends State<LaporanScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<LaporanProvider>().fetchLaporanFromApi();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {

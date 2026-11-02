@@ -9,8 +9,21 @@ import '../widgets/app_sidebar.dart';
 import 'dashboard_screen.dart';
 import 'usaha_screen.dart';
 
-class TransaksiScreen extends StatelessWidget {
+class TransaksiScreen extends StatefulWidget {
   const TransaksiScreen({super.key});
+
+  @override
+  State<TransaksiScreen> createState() => _TransaksiScreenState();
+}
+
+class _TransaksiScreenState extends State<TransaksiScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<TransaksiProvider>().fetchTransaksiFromApi();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {

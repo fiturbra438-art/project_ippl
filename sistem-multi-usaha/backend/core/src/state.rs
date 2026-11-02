@@ -39,6 +39,69 @@ impl AppState {
             .execute(&pool)
             .await;
 
+        // 1c. Migrasi skema kasir fleksibel (Rental, Jasa, Custom Note & Duration) pada tabel transactions & transaction_items
+        let _ = sqlx::query("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS customer_name VARCHAR(150)")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS notes TEXT")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS operation_mode VARCHAR(30) DEFAULT 'fleksibel'")
+            .execute(&pool)
+            .await;
+
+        let _ = sqlx::query("ALTER TABLE transaction_items ALTER COLUMN product_id DROP NOT NULL")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS item_name VARCHAR(150)")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS item_type VARCHAR(30) DEFAULT 'barang'")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS rental_duration INT DEFAULT 1")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS duration_unit VARCHAR(20) DEFAULT 'jam'")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS notes TEXT")
+            .execute(&pool)
+            .await;
+
+        // 1d. Tabel Lifecycle Rental & Jasa (Active Orders, Status Pengerjaan & Pengembalian Sewa)
+        let _ = sqlx::query(
+            "CREATE TABLE IF NOT EXISTS rental_service_orders (
+                id SERIAL PRIMARY KEY,
+                trx_id INT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+                unit_id INT NOT NULL REFERENCES business_units(id) ON DELETE CASCADE,
+                product_id INT REFERENCES products(id) ON DELETE SET NULL,
+                item_name VARCHAR(150) NOT NULL,
+                order_type VARCHAR(30) NOT NULL,
+                customer_name VARCHAR(150),
+                start_time TIMESTAMP NOT NULL DEFAULT now(),
+                expected_end_time TIMESTAMP NOT NULL,
+                actual_end_time TIMESTAMP,
+                duration INT NOT NULL DEFAULT 1,
+                duration_unit VARCHAR(20) NOT NULL DEFAULT 'jam',
+                status VARCHAR(30) NOT NULL,
+                assigned_staff VARCHAR(100),
+                deposit_amount NUMERIC(14,2) DEFAULT 0,
+                penalty_fee NUMERIC(14,2) DEFAULT 0,
+                notes TEXT,
+                created_at TIMESTAMP NOT NULL DEFAULT now()
+            )"
+        )
+        .execute(&pool)
+        .await;
+
+        let _ = sqlx::query("CREATE INDEX IF NOT EXISTS ix_rental_service_unit_status ON rental_service_orders(unit_id, status)")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("CREATE INDEX IF NOT EXISTS ix_rental_service_product_active ON rental_service_orders(product_id, status)")
+            .execute(&pool)
+            .await;
+
         // Baca seluruh data nyata yang tersimpan di PostgreSQL ke cache RAM.
         #[derive(sqlx::FromRow)]
         struct UserRow {

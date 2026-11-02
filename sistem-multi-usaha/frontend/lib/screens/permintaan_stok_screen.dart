@@ -8,8 +8,21 @@ import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
 import 'dashboard_screen.dart';
 
-class PermintaanStokScreen extends StatelessWidget {
+class PermintaanStokScreen extends StatefulWidget {
   const PermintaanStokScreen({super.key});
+
+  @override
+  State<PermintaanStokScreen> createState() => _PermintaanStokScreenState();
+}
+
+class _PermintaanStokScreenState extends State<PermintaanStokScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<PermintaanStokProvider>().fetchPermintaanFromApi();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {

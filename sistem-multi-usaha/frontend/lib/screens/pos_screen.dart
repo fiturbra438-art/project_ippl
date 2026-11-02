@@ -31,6 +31,12 @@ class _PosScreenState extends State<PosScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final pos = Provider.of<PosProvider>(context, listen: false);
       pos.initShiftStatus(pos.activeUnitId);
+      if (pos.activeUnitId > 0) {
+        pos.loadActiveOrders(pos.activeUnitId);
+        context.read<ProdukProvider>().fetchProdukFromApi(unitId: pos.activeUnitId);
+      } else {
+        context.read<ProdukProvider>().fetchProdukFromApi();
+      }
     });
   }
 
@@ -97,6 +103,8 @@ class _PosScreenState extends State<PosScreen> {
                       final selected = context.read<UsahaProvider>().daftarUsaha.firstWhere((u) => u.id == val);
                       pos.setActiveUnit(val, selected.nama);
                       pos.initShiftStatus(val);
+                      pos.loadActiveOrders(val);
+                      context.read<ProdukProvider>().fetchProdukFromApi(unitId: val);
                     }
                   },
                 ),
@@ -170,6 +178,28 @@ class _PosScreenState extends State<PosScreen> {
                     pos.setModeOperasi(val);
                   }
                 },
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Tombol Monitoring Pelacak Rental Aktif & Status Jasa
+          Tooltip(
+            message: 'Pantau Barang Sedang Disewa & Jasa Bertugas',
+            child: ElevatedButton.icon(
+              onPressed: () => _showPelacakRentalDanJasaModal(context),
+              icon: const Icon(Icons.assignment_turned_in_rounded, size: 16),
+              label: Text(
+                pos.activeOrders.isNotEmpty
+                    ? 'Status Sewa/Jasa (${pos.activeOrders.length})'
+                    : 'Status Sewa/Jasa',
+                style: const TextStyle(fontSize: 12),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: pos.activeOrders.any((o) => o['status'] == 'overdue')
+                    ? const Color(0xFFDC2626)
+                    : const Color(0xFF4F46E5),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               ),
             ),
           ),
@@ -1977,6 +2007,293 @@ class _PosScreenState extends State<PosScreen> {
               Navigator.pop(ctx);
             },
             child: const Text('Simpan'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 4. MODAL PELACAK BARANG SEWA & STATUS JASA (LIFECYCLE TRACKING & RETURN)
+  void _showPelacakRentalDanJasaModal(BuildContext context) {
+    final pos = Provider.of<PosProvider>(context, listen: false);
+    pos.loadActiveOrders(pos.activeUnitId);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return Consumer<PosProvider>(
+          builder: (context, posProv, _) {
+            final orders = posProv.activeOrders;
+
+            return SizedBox(
+              height: MediaQuery.of(context).size.height * 0.85,
+              child: Column(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                    decoration: const BoxDecoration(
+                      border: Border(bottom: BorderSide(color: AppTheme.cardBorder)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.assignment_turned_in_rounded, color: AppTheme.primaryBlue),
+                            const SizedBox(width: 10),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('Pelacak Sewa & Status Jasa', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                                Text('Unit: ${posProv.activeUnitNama} • ${orders.length} pesanan berlangsung', style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                              ],
+                            ),
+                          ],
+                        ),
+                        IconButton(
+                          tooltip: 'Segarkan data',
+                          icon: const Icon(Icons.refresh_rounded, color: AppTheme.primaryBlue),
+                          onPressed: () => posProv.loadActiveOrders(posProv.activeUnitId),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: posProv.isLoadingOrders
+                        ? const Center(child: CircularProgressIndicator())
+                        : orders.isEmpty
+                            ? Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: const [
+                                    Icon(Icons.check_circle_outline_rounded, size: 48, color: AppTheme.accentGreen),
+                                    SizedBox(height: 12),
+                                    Text('Semua Layanan & Sewa Selesai', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                                    SizedBox(height: 4),
+                                    Text('Tidak ada barang yang sedang dipinjam atau jasa yang bertugas saat ini.', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                                  ],
+                                ),
+                              )
+                            : ListView.separated(
+                                padding: const EdgeInsets.all(16),
+                                itemCount: orders.length,
+                                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                                itemBuilder: (context, index) {
+                                  final o = orders[index];
+                                  final orderId = o['id'] as int;
+                                  final isRental = o['order_type'] == 'rental';
+                                  final status = o['status'] as String? ?? 'active';
+                                  final isOverdue = status == 'overdue';
+
+                                  return Container(
+                                    padding: const EdgeInsets.all(16),
+                                    decoration: BoxDecoration(
+                                      color: isOverdue ? const Color(0xFFFEF2F2) : Colors.white,
+                                      borderRadius: BorderRadius.circular(14),
+                                      border: Border.all(
+                                        color: isOverdue ? const Color(0xFFFECACA) : AppTheme.cardBorder,
+                                        width: isOverdue ? 1.5 : 1,
+                                      ),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Container(
+                                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                  decoration: BoxDecoration(
+                                                    color: isRental ? const Color(0xFFFEF3C7) : const Color(0xFFE0E7FF),
+                                                    borderRadius: BorderRadius.circular(6),
+                                                  ),
+                                                  child: Text(
+                                                    isRental ? '⏱️ RENTAL SEWA' : '🛠️ LAYANAN JASA',
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: isRental ? const Color(0xFFD97706) : const Color(0xFF4338CA),
+                                                    ),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 8),
+                                                Text(
+                                                  'Order #${o['id']} (Trx #${o['trx_id']})',
+                                                  style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                                                ),
+                                              ],
+                                            ),
+                                            // Status Badge
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                              decoration: BoxDecoration(
+                                                color: isOverdue
+                                                    ? const Color(0xFFDC2626)
+                                                    : status == 'ready'
+                                                        ? AppTheme.accentGreen
+                                                        : status == 'in_progress'
+                                                            ? AppTheme.primaryBlue
+                                                            : const Color(0xFFF59E0B),
+                                                borderRadius: BorderRadius.circular(6),
+                                              ),
+                                              child: Text(
+                                                status.toUpperCase(),
+                                                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 10),
+                                        Text(
+                                          o['item_name'] ?? 'Item',
+                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          'Pelanggan: ${o['customer_name'] ?? '-'} • Durasi: ${o['duration']} ${o['duration_unit']}',
+                                          style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          'Batas Waktu: ${o['expected_end_time']} ${isOverdue ? '(⚠️ MELEBIHI BATAS)' : ''}',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: isOverdue ? FontWeight.bold : FontWeight.normal,
+                                            color: isOverdue ? const Color(0xFFDC2626) : AppTheme.textSecondary,
+                                          ),
+                                        ),
+                                        if (o['notes'] != null && (o['notes'] as String).isNotEmpty)
+                                          Padding(
+                                            padding: const EdgeInsets.only(top: 4),
+                                            child: Text('Catatan: ${o['notes']}', style: const TextStyle(fontSize: 11, color: AppTheme.textMuted, fontStyle: FontStyle.italic)),
+                                          ),
+                                        const Divider(height: 16),
+                                        // Action buttons
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.end,
+                                          children: [
+                                            if (isRental) ...[
+                                              ElevatedButton.icon(
+                                                icon: const Icon(Icons.assignment_return_rounded, size: 16),
+                                                label: const Text('Proses Pengembalian'),
+                                                style: ElevatedButton.styleFrom(
+                                                  backgroundColor: AppTheme.accentGreen,
+                                                  foregroundColor: Colors.white,
+                                                ),
+                                                onPressed: () => _showDialogReturnRental(context, orderId, o['item_name'] ?? 'Barang', isOverdue),
+                                              ),
+                                            ] else ...[
+                                              // Jasa Status Action (Antre -> Dikerjakan -> Siap -> Selesai)
+                                              OutlinedButton(
+                                                onPressed: () => posProv.updateServiceOrderStatus(orderId, 'in_progress'),
+                                                child: const Text('Mulai Kerjakan'),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              ElevatedButton(
+                                                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryBlue),
+                                                onPressed: () => posProv.updateServiceOrderStatus(orderId, 'ready'),
+                                                child: const Text('Siap Diambil'),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              ElevatedButton(
+                                                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.accentGreen),
+                                                onPressed: () => posProv.updateServiceOrderStatus(orderId, 'completed'),
+                                                child: const Text('Serahkan / Selesai'),
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                              ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // DIALOG FORM RETURN RENTAL & DENDA
+  void _showDialogReturnRental(BuildContext context, int orderId, String itemName, bool isOverdue) {
+    final pos = Provider.of<PosProvider>(context, listen: false);
+    final dendaCtrl = TextEditingController(text: isOverdue ? '25000' : '0');
+    final catatanCtrl = TextEditingController(text: isOverdue ? 'Terlambat kembali' : 'Barang lengkap & baik');
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: const [
+            Icon(Icons.assignment_return_rounded, color: AppTheme.accentGreen),
+            SizedBox(width: 8),
+            Text('Pengembalian Barang Sewa', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          ],
+        ),
+        content: SizedBox(
+          width: 340,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Barang: $itemName', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+              const SizedBox(height: 12),
+              TextField(
+                controller: dendaCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Denda / Biaya Kerusakan (Rp)',
+                  hintText: '0',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.warning_amber_rounded, color: Color(0xFFDC2626)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: catatanCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Kondisi Fisik / Catatan Pengembalian',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.accentGreen),
+            onPressed: () async {
+              final denda = double.tryParse(dendaCtrl.text) ?? 0.0;
+              final ok = await pos.returnRentalOrder(
+                orderId,
+                penalty: denda,
+                notes: catatanCtrl.text.trim(),
+              );
+
+              if (ctx.mounted) Navigator.pop(ctx);
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    backgroundColor: ok ? AppTheme.accentGreen : const Color(0xFFDC2626),
+                    content: Text(ok ? 'Barang sewa berhasil dikembalikan ke status siap pakai!' : 'Gagal memproses pengembalian sewa'),
+                  ),
+                );
+              }
+            },
+            child: const Text('Konfirmasi Terima Barang'),
           ),
         ],
       ),

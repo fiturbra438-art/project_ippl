@@ -68,6 +68,10 @@ class PosProvider extends ChangeNotifier {
   String _waktuBukaShift = '';
   bool _shiftIsOpen = false;
 
+  // Active Rental & Service Orders
+  List<Map<String, dynamic>> _activeOrders = [];
+  bool _isLoadingOrders = false;
+
   List<CartItem> get keranjang => _keranjang;
   double get diskonPersen => _diskonPersen;
   MetodeBayar get metodeBayar => _metodeBayar;
@@ -86,6 +90,64 @@ class PosProvider extends ChangeNotifier {
   int get totalTransaksiShift => _totalTransaksiShift;
   String get waktuBukaShift => _waktuBukaShift;
   bool get shiftIsOpen => _shiftIsOpen;
+  List<Map<String, dynamic>> get activeOrders => _activeOrders;
+  bool get isLoadingOrders => _isLoadingOrders;
+
+  // 1a. Load Pesanan Rental & Jasa yang sedang aktif
+  Future<void> loadActiveOrders(int unitId) async {
+    _isLoadingOrders = true;
+    notifyListeners();
+    try {
+      final res = await ApiService.get('/pos/orders/active?unit_id=$unitId');
+      if (res != null && res['status'] == 'success' && res['data'] != null) {
+        final list = res['data'] as List;
+        _activeOrders = list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      } else {
+        _activeOrders = [];
+      }
+    } catch (_) {
+      _activeOrders = [];
+    }
+    _isLoadingOrders = false;
+    notifyListeners();
+  }
+
+  // 1b. Pengembalian Rental (Return)
+  Future<bool> returnRentalOrder(int orderId, {double penalty = 0.0, String? notes}) async {
+    try {
+      final res = await ApiService.post('/pos/rental/return', {
+        'order_id': orderId,
+        'penalty_fee': penalty,
+        'notes': notes,
+      });
+      if (res != null && res['status'] == 'success') {
+        if (_activeUnitId > 0) {
+          await loadActiveOrders(_activeUnitId);
+        }
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  // 1c. Update Status Layanan Jasa (queued, in_progress, ready, completed)
+  Future<bool> updateServiceOrderStatus(int orderId, String newStatus, {String? staff, String? notes}) async {
+    try {
+      final res = await ApiService.patch('/pos/service/status', {
+        'order_id': orderId,
+        'status': newStatus,
+        'assigned_staff': staff,
+        'notes': notes,
+      });
+      if (res != null && res['status'] == 'success') {
+        if (_activeUnitId > 0) {
+          await loadActiveOrders(_activeUnitId);
+        }
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
 
   void setModeOperasi(ModeOperasiKasir mode) {
     _modeOperasi = mode;
@@ -178,13 +240,17 @@ class PosProvider extends ChangeNotifier {
   Future<bool> checkoutAPI(int unitId, String metodeBayarStr, {String? keterangan}) async {
     if (_keranjang.isEmpty) return false;
 
-    // Untuk item yang terikat produk database, kirim ID produk.
-    // Untuk item kustom ad-hoc / jasa / sewa tanpa id produk, fallback menggunakan produk id pertama atau dicatat di note.
+    // Kirim struktur item lengkap (id produk opsional, nama custom, tipe, tarif sewa/jasa, durasi sewa, catatan)
     final itemsPayload = _keranjang.map((c) {
       return {
-        'produk_id': c.produk?.id ?? 0,
+        'produk_id': c.produk?.id,
+        'nama': c.customNama,
+        'tipe': c.tipe.name,
         'jumlah': c.kuantitas,
         'harga_satuan': c.hargaEfektif,
+        'durasi': c.durasiSewa,
+        'unit_durasi': c.unitDurasi,
+        'catatan': c.catatan,
       };
     }).toList();
 

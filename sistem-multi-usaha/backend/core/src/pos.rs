@@ -9,9 +9,13 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::auth::require_claims;
-use crate::models::{AuditLogModel, JenisTransaksi, ShiftKasirModel, StatusShift, TransaksiModel};
+use crate::models::{
+    AuditLogModel, JenisTransaksi, RentalServiceOrderModel, ShiftKasirModel, StatusShift,
+    TransaksiModel,
+};
 use crate::schemas::{
-    ApiResponse, BukaShiftRequest, CheckoutRequest, CreateTransaksiManualRequest, TutupShiftRequest,
+    ApiResponse, BukaShiftRequest, CheckoutRequest, CreateTransaksiManualRequest,
+    ReturnRentalRequest, TutupShiftRequest, UpdateServiceStatusRequest,
 };
 use crate::state::AppState;
 
@@ -309,6 +313,7 @@ pub async fn checkout_pos(
     }
 
     // Siapkan items dalam format JSONB untuk dikirim ke Stored Procedure
+    // Mendukung algoritma kasir fleksibel: Toko Retail, Rental/Penyewaan, Jasa & Servis, serta Item Bebas/Ad-hoc
     let mut mapped_items: Vec<serde_json::Value> = Vec::new();
     for it in &payload.items {
         if it.jumlah <= 0 {
@@ -322,33 +327,101 @@ pub async fn checkout_pos(
             )
                 .into_response();
         }
-        let harga_server: Option<rust_decimal::Decimal> = sqlx::query_scalar(
-            "SELECT p.harga_jual
-             FROM products p
-             JOIN inventories i ON i.product_id = p.id
-             WHERE p.id = $1 AND p.owner_id = $2 AND i.unit_id = $3",
-        )
-        .bind(it.produk_id as i32)
-        .bind(owner_id as i32)
-        .bind(payload.unit_id as i32)
-        .fetch_optional(&state.db)
-        .await
-        .unwrap_or(None);
-        let Some(harga_server) = harga_server else {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiResponse::<TransaksiModel> {
-                    status: "error".to_string(),
-                    message: "Produk tidak tersedia pada unit usaha yang dipilih.".to_string(),
-                    data: None,
-                }),
+
+        let tipe_item = it.tipe.clone().unwrap_or_else(|| "barang".to_string());
+        let prod_id_opt = it.produk_id.filter(|&id| id > 0);
+
+        // FITUR ANTI DOUBLE-BOOKING:
+        // Jika item bertipe 'rental' dan memiliki ID produk fisik, cek apakah barang sedang dalam masa sewa aktif
+        if tipe_item.to_lowercase() == "rental" {
+            if let Some(pid) = prod_id_opt {
+                let is_rented: Option<(i32, chrono::NaiveDateTime, Option<String>)> = sqlx::query_as(
+                    "SELECT id, expected_end_time, customer_name
+                     FROM rental_service_orders
+                     WHERE product_id = $1 AND unit_id = $2 AND status = 'active'
+                     LIMIT 1"
+                )
+                .bind(pid as i32)
+                .bind(payload.unit_id as i32)
+                .fetch_optional(&state.db)
+                .await
+                .unwrap_or(None);
+
+                if let Some((_order_id, end_time, cust)) = is_rented {
+                    let cust_name = cust.unwrap_or_else(|| "Pelanggan".to_string());
+                    return (
+                        StatusCode::CONFLICT,
+                        Json(ApiResponse::<TransaksiModel> {
+                            status: "error".to_string(),
+                            message: format!(
+                                "Barang ID #{} sedang dalam masa sewa aktif oleh {} sampai {}. Tidak dapat disewakan kembali sebelum dikembalikan!",
+                                pid,
+                                cust_name,
+                                end_time.format("%Y-%m-%d %H:%M")
+                            ),
+                            data: None,
+                        }),
+                    )
+                        .into_response();
+                }
+            }
+        }
+
+        // Jika terdaftar sebagai produk fisik di master database
+        let (harga_final, nama_final) = if let Some(pid) = prod_id_opt {
+            let info_server: Option<(rust_decimal::Decimal, String)> = sqlx::query_as(
+                "SELECT p.harga_jual, p.nama
+                 FROM products p
+                 JOIN inventories i ON i.product_id = p.id
+                 WHERE p.id = $1 AND p.owner_id = $2 AND i.unit_id = $3",
             )
-                .into_response();
+            .bind(pid as i32)
+            .bind(owner_id as i32)
+            .bind(payload.unit_id as i32)
+            .fetch_optional(&state.db)
+            .await
+            .unwrap_or(None);
+
+            if let Some((harga_db, nama_db)) = info_server {
+                // Jika kasir memberikan harga satuan kustom (misal diskon atau nego), prioritaskan harga kasir
+                let harga_satuan = if let Some(custom_h) = it.harga_satuan {
+                    rust_decimal::Decimal::from_f64_retain(custom_h).unwrap_or(harga_db)
+                } else {
+                    harga_db
+                };
+                let nama_item = it.nama.clone().unwrap_or(nama_db);
+                (harga_satuan, nama_item)
+            } else {
+                // Fallback jika id produk tidak ditemukan di tabel tertentu
+                let fallback_h = it
+                    .harga_satuan
+                    .and_then(|h| rust_decimal::Decimal::from_f64_retain(h))
+                    .unwrap_or_else(|| rust_decimal::Decimal::from(0));
+                let fallback_n = it.nama.clone().unwrap_or_else(|| "Item Kustom".to_string());
+                (fallback_h, fallback_n)
+            }
+        } else {
+            // Item Ad-hoc / Jasa / Rental tanpa keterikatan produk inventori fisik
+            let h = it
+                .harga_satuan
+                .and_then(|h| rust_decimal::Decimal::from_f64_retain(h))
+                .unwrap_or_else(|| rust_decimal::Decimal::from(0));
+            let n = it
+                .nama
+                .clone()
+                .unwrap_or_else(|| format!("Layanan {}", tipe_item.to_uppercase()));
+            (h, n)
         };
+
         mapped_items.push(serde_json::json!({
-            "product_id": it.produk_id,
+            "product_id": prod_id_opt.unwrap_or(0),
+            "nama": nama_final,
+            "tipe": tipe_item,
             "qty": it.jumlah,
-            "harga_satuan": harga_server
+            "harga_satuan": harga_final,
+            "durasi": it.durasi.unwrap_or(1),
+            "unit_durasi": it.unit_durasi.clone().unwrap_or_else(|| "jam".to_string()),
+            "catatan": it.catatan.clone().unwrap_or_default()
         }));
     }
     let items_json = serde_json::Value::Array(mapped_items);
@@ -675,4 +748,298 @@ pub async fn create_transaksi_manual(
         }),
     )
         .into_response()
+}
+
+// ==================== LIFECYCLE RENTAL & JASA HANDLERS ====================
+
+// 7. DAFTAR PESANAN RENTAL & JASA AKTIF / BERJALAN
+pub async fn list_active_orders(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<TransaksiQuery>,
+) -> impl IntoResponse {
+    let claims = match require_claims(&headers, &state.jwt_secret) {
+        Ok(c) => c,
+        Err(err) => return err.into_response(),
+    };
+    let owner_id = claims.owner_id;
+
+    #[derive(sqlx::FromRow)]
+    struct OrderDbRow {
+        id: i32,
+        trx_id: i32,
+        unit_id: i32,
+        product_id: Option<i32>,
+        item_name: String,
+        order_type: String,
+        customer_name: Option<String>,
+        start_time: chrono::NaiveDateTime,
+        expected_end_time: chrono::NaiveDateTime,
+        actual_end_time: Option<chrono::NaiveDateTime>,
+        duration: i32,
+        duration_unit: String,
+        status: String,
+        assigned_staff: Option<String>,
+        deposit_amount: Option<rust_decimal::Decimal>,
+        penalty_fee: Option<rust_decimal::Decimal>,
+        notes: Option<String>,
+    }
+
+    // Ambil order rental & jasa yang belum selesai dari PostgreSQL
+    let rows = if let Some(uid) = query.unit_id {
+        sqlx::query_as::<_, OrderDbRow>(
+            "SELECT o.id, o.trx_id, o.unit_id, o.product_id, o.item_name, o.order_type,
+                    o.customer_name, o.start_time, o.expected_end_time, o.actual_end_time,
+                    o.duration, o.duration_unit, o.status, o.assigned_staff,
+                    o.deposit_amount, o.penalty_fee, o.notes
+             FROM rental_service_orders o
+             JOIN business_units u ON u.id = o.unit_id
+             WHERE u.owner_id = $1 AND o.unit_id = $2
+               AND o.status NOT IN ('returned', 'completed', 'cancelled')
+             ORDER BY o.expected_end_time ASC",
+        )
+        .bind(owner_id as i32)
+        .bind(uid as i32)
+        .fetch_all(&state.db)
+        .await
+    } else {
+        sqlx::query_as::<_, OrderDbRow>(
+            "SELECT o.id, o.trx_id, o.unit_id, o.product_id, o.item_name, o.order_type,
+                    o.customer_name, o.start_time, o.expected_end_time, o.actual_end_time,
+                    o.duration, o.duration_unit, o.status, o.assigned_staff,
+                    o.deposit_amount, o.penalty_fee, o.notes
+             FROM rental_service_orders o
+             JOIN business_units u ON u.id = o.unit_id
+             WHERE u.owner_id = $1
+               AND o.status NOT IN ('returned', 'completed', 'cancelled')
+             ORDER BY o.expected_end_time ASC",
+        )
+        .bind(owner_id as i32)
+        .fetch_all(&state.db)
+        .await
+    };
+
+    use rust_decimal::prelude::ToPrimitive;
+    let hasil: Vec<RentalServiceOrderModel> = match rows {
+        Ok(list) => {
+            let now = chrono::Local::now().naive_local();
+            list.into_iter()
+                .map(|r| {
+                    let mut st = r.status;
+                    // Auto-flag jika sewa aktif telah melewati expected_end_time
+                    if r.order_type == "rental" && st == "active" && r.expected_end_time < now {
+                        st = "overdue".to_string();
+                    }
+
+                    RentalServiceOrderModel {
+                        id: r.id as i64,
+                        trx_id: r.trx_id as i64,
+                        unit_id: r.unit_id as i64,
+                        product_id: r.product_id.map(|p| p as i64),
+                        item_name: r.item_name,
+                        order_type: r.order_type,
+                        customer_name: r.customer_name,
+                        start_time: r.start_time.format("%Y-%m-%d %H:%M").to_string(),
+                        expected_end_time: r.expected_end_time.format("%Y-%m-%d %H:%M").to_string(),
+                        actual_end_time: r.actual_end_time.map(|t| t.format("%Y-%m-%d %H:%M").to_string()),
+                        duration: r.duration,
+                        duration_unit: r.duration_unit,
+                        status: st,
+                        assigned_staff: r.assigned_staff,
+                        deposit_amount: r.deposit_amount.and_then(|d| d.to_f64()).unwrap_or(0.0),
+                        penalty_fee: r.penalty_fee.and_then(|d| d.to_f64()).unwrap_or(0.0),
+                        notes: r.notes,
+                    }
+                })
+                .collect()
+        }
+        Err(e) => {
+            tracing::error!("Gagal mengambil active rental/service orders: {}", e);
+            Vec::new()
+        }
+    };
+
+    Json(ApiResponse::<Vec<RentalServiceOrderModel>> {
+        status: "success".to_string(),
+        message: "Daftar pesanan sewa dan jasa berhasil diambil.".to_string(),
+        data: Some(hasil),
+    })
+    .into_response()
+}
+
+// 8. PENGEMBALIAN BARANG SEWA (RETURN RENTAL)
+pub async fn return_rental(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<ReturnRentalRequest>,
+) -> impl IntoResponse {
+    let claims = match require_claims(&headers, &state.jwt_secret) {
+        Ok(c) => c,
+        Err(err) => return err.into_response(),
+    };
+    let owner_id = claims.owner_id;
+
+    // Cek keberadaan order rental
+    let order_info: Option<(i32, String, chrono::NaiveDateTime, Option<String>)> = sqlx::query_as(
+        "SELECT o.id, o.item_name, o.expected_end_time, o.customer_name
+         FROM rental_service_orders o
+         JOIN business_units u ON u.id = o.unit_id
+         WHERE o.id = $1 AND u.owner_id = $2 AND o.order_type = 'rental'",
+    )
+    .bind(payload.order_id as i32)
+    .bind(owner_id as i32)
+    .fetch_optional(&state.db)
+    .await
+    .unwrap_or(None);
+
+    let Some((_id, item_name, _exp_time, cust)) = order_info else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<()> {
+                status: "error".to_string(),
+                message: "Pesanan sewa tidak ditemukan atau bukan milik bisnis Anda.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    };
+
+    let penalty = payload.penalty_fee.unwrap_or(0.0);
+    let penalty_dec = rust_decimal::Decimal::from_f64_retain(penalty).unwrap_or_default();
+
+    // Tandai status 'returned' dan simpan waktu aktual pengembalian
+    let res = sqlx::query(
+        "UPDATE rental_service_orders
+         SET status = 'returned', actual_end_time = now(), penalty_fee = $1,
+             notes = COALESCE(notes, '') || ' [Dikembalikan: ' || COALESCE($2, 'Sesuai kondisi') || ']'
+         WHERE id = $3",
+    )
+    .bind(penalty_dec)
+    .bind(payload.notes.clone())
+    .bind(payload.order_id as i32)
+    .execute(&state.db)
+    .await;
+
+    match res {
+        Ok(_) => {
+            // Catat ke audit trail
+            let _ = sqlx::query(
+                "INSERT INTO audit_logs (owner_id, aktor, role, aksi, modul, target, detail, waktu)
+                 VALUES ($1, $2, 'kasir', 'Pengembalian Sewa', 'Kasir', $3, $4, now())"
+            )
+            .bind(owner_id as i32)
+            .bind(&claims.sub)
+            .bind(format!("Order Sewa #{}", payload.order_id))
+            .bind(format!(
+                "Barang \"{}\" telah dikembalikan oleh {}. Denda keterlambatan/kerusakan: Rp {:.0}",
+                item_name,
+                cust.unwrap_or_else(|| "Pelanggan".to_string()),
+                penalty
+            ))
+            .execute(&state.db)
+            .await;
+
+            (
+                StatusCode::OK,
+                Json(ApiResponse::<()> {
+                    status: "success".to_string(),
+                    message: format!(
+                        "Barang sewa \"{}\" berhasil dikembalikan ke inventori! (Denda: Rp {:.0})",
+                        item_name, penalty
+                    ),
+                    data: None,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()> {
+                status: "error".to_string(),
+                message: format!("Gagal memproses pengembalian sewa: {}", e),
+                data: None,
+            }),
+        )
+            .into_response(),
+    }
+}
+
+// 9. UPDATE STATUS JASA / LAYANAN / SERVIS (BERIKUT PENUGASAN PETUGAS/TEKNISI)
+pub async fn update_service_status(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<UpdateServiceStatusRequest>,
+) -> impl IntoResponse {
+    let claims = match require_claims(&headers, &state.jwt_secret) {
+        Ok(c) => c,
+        Err(err) => return err.into_response(),
+    };
+    let owner_id = claims.owner_id;
+
+    let valid_status = ["queued", "in_progress", "ready", "completed", "cancelled"];
+    if !valid_status.contains(&payload.status.as_str()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<()> {
+                status: "error".to_string(),
+                message: "Status layanan tidak valid. Pilihan: queued, in_progress, ready, completed"
+                    .to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
+
+    let is_done = payload.status == "completed";
+
+    let res = sqlx::query(
+        "UPDATE rental_service_orders
+         SET status = $1,
+             assigned_staff = COALESCE($2, assigned_staff),
+             actual_end_time = CASE WHEN $3 THEN now() ELSE actual_end_time END,
+             notes = CASE WHEN $4 IS NOT NULL THEN COALESCE(notes, '') || ' [' || $4 || ']' ELSE notes END
+         WHERE id = $5 AND unit_id IN (SELECT id FROM business_units WHERE owner_id = $6)
+           AND order_type = 'service'",
+    )
+    .bind(&payload.status)
+    .bind(payload.assigned_staff)
+    .bind(is_done)
+    .bind(payload.notes)
+    .bind(payload.order_id as i32)
+    .bind(owner_id as i32)
+    .execute(&state.db)
+    .await;
+
+    match res {
+        Ok(r) if r.rows_affected() > 0 => (
+            StatusCode::OK,
+            Json(ApiResponse::<()> {
+                status: "success".to_string(),
+                message: format!(
+                    "Status tugas layanan jasa berhasil diubah menjadi: {}",
+                    payload.status.to_uppercase()
+                ),
+                data: None,
+            }),
+        )
+            .into_response(),
+        Ok(_) => (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<()> {
+                status: "error".to_string(),
+                message: "Order layanan jasa tidak ditemukan.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()> {
+                status: "error".to_string(),
+                message: format!("Gagal update status layanan: {}", e),
+                data: None,
+            }),
+        )
+            .into_response(),
+    }
 }

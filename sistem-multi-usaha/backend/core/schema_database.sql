@@ -103,6 +103,11 @@ DECLARE
     v_unit_id INT;
     v_inv_id INT;
 BEGIN
+    -- Jika product_id NULL atau 0 (item non-stok / jasa / rental / ad-hoc), lewati pengurangan inventori fisik
+    IF NEW.product_id IS NULL OR NEW.product_id <= 0 THEN
+        RETURN NEW;
+    END IF;
+
     SELECT unit_id INTO v_unit_id FROM transactions WHERE id = NEW.trx_id;
 
     -- Kurangi kuantitas stok di tabel inventories
@@ -152,7 +157,7 @@ EXECUTE FUNCTION trg_fn_update_omzet_unit();
 -- Aplikasi Backend Rust HANYA PERLU MEMANGGIL PROCEDURE INI ("CALL sp_...")
 -- ----------------------------------------------------------------------------
 
--- PROSEDUR 1: CHECKOUT KASIR LENGKAP (Memanggil fn_cek_ketersediaan_stok, trigger trg_kurangi_stok, update shift, & catat audit)
+-- PROSEDUR 1: CHECKOUT KASIR FLEKSIBEL (Mendukung Retail, Sewa/Rental, Jasa, & Ad-hoc Kustom)
 CREATE OR REPLACE PROCEDURE sp_proses_checkout_kasir(
     IN p_unit_id INT,
     IN p_kasir_id INT,
@@ -172,6 +177,11 @@ DECLARE
     v_subtotal NUMERIC(14,2);
     v_unit_ada BOOLEAN;
     v_is_tunai BOOLEAN;
+    v_tipe VARCHAR(30);
+    v_custom_nama VARCHAR(150);
+    v_durasi INT;
+    v_unit_durasi VARCHAR(20);
+    v_catatan TEXT;
 BEGIN
     -- 1. Validasi Keberadaan Unit
     SELECT has_pos INTO v_unit_ada FROM business_units WHERE id = p_unit_id;
@@ -181,16 +191,20 @@ BEGIN
         RETURN;
     END IF;
 
-    -- 2. Validasi Ketersediaan Stok Menggunakan FUNCTION fn_cek_ketersediaan_stok
+    -- 2. Validasi Ketersediaan Stok (Hanya untuk item barang fisik yang memiliki product_id valid > 0)
     FOR item IN SELECT * FROM jsonb_array_elements(p_items)
     LOOP
-        v_prod_id := (item->>'product_id')::INT;
-        v_qty := (item->>'qty')::INT;
+        v_prod_id := COALESCE((item->>'product_id')::INT, 0);
+        v_qty := COALESCE((item->>'qty')::INT, 1);
+        v_tipe := COALESCE(item->>'tipe', 'barang');
         
-        IF NOT fn_cek_ketersediaan_stok(p_unit_id, v_prod_id, v_qty) THEN
-            p_status_out := 'error';
-            p_pesan_out := 'Gagal: Stok untuk produk ID #' || v_prod_id || ' tidak mencukupi!';
-            RETURN;
+        -- Hanya cek stok jika item bertipe 'barang' dan memiliki product_id fisik
+        IF v_prod_id > 0 AND LOWER(v_tipe) = 'barang' THEN
+            IF NOT fn_cek_ketersediaan_stok(p_unit_id, v_prod_id, v_qty) THEN
+                p_status_out := 'error';
+                p_pesan_out := 'Gagal: Stok untuk produk ID #' || v_prod_id || ' tidak mencukupi!';
+                RETURN;
+            END IF;
         END IF;
     END LOOP;
 
@@ -202,16 +216,78 @@ BEGIN
     VALUES (p_unit_id, p_kasir_id, now(), p_total_bayar, p_metode_bayar, 'selesai', now())
     RETURNING id INTO p_trx_id;
 
-    -- 5. Masukkan Detail Item (Otomatis Memicu TRIGGER trg_kurangi_stok_inventaris)
+    -- 5. Masukkan Detail Item (Mendukung Produk Fisik, Rental, Jasa, atau Custom)
     FOR item IN SELECT * FROM jsonb_array_elements(p_items)
     LOOP
-        v_prod_id := (item->>'product_id')::INT;
-        v_qty := (item->>'qty')::INT;
+        v_prod_id := NULLIF(COALESCE((item->>'product_id')::INT, 0), 0);
+        v_qty := COALESCE((item->>'qty')::INT, 1);
         v_harga := (item->>'harga_satuan')::NUMERIC;
         v_subtotal := v_harga * v_qty;
+        v_tipe := COALESCE(item->>'tipe', 'barang');
+        v_custom_nama := item->>'nama';
+        v_durasi := COALESCE((item->>'durasi')::INT, 1);
+        v_unit_durasi := item->>'unit_durasi';
+        v_catatan := item->>'catatan';
 
-        INSERT INTO transaction_items (trx_id, product_id, qty, harga_satuan, subtotal, created_at)
-        VALUES (p_trx_id, v_prod_id, v_qty, v_harga, v_subtotal, now());
+        INSERT INTO transaction_items (
+            trx_id, product_id, item_name, item_type, qty, harga_satuan, subtotal, rental_duration, duration_unit, notes, created_at
+        ) VALUES (
+            p_trx_id, 
+            v_prod_id, 
+            v_custom_nama, 
+            v_tipe, 
+            v_qty, 
+            v_harga, 
+            v_subtotal, 
+            v_durasi, 
+            v_unit_durasi, 
+            v_catatan, 
+            now()
+        );
+
+        -- Otomatis buat entri pelacakan aktif jika item adalah Rental atau Jasa
+        IF LOWER(v_tipe) = 'rental' THEN
+            INSERT INTO rental_service_orders (
+                trx_id, unit_id, product_id, item_name, order_type, customer_name,
+                start_time, expected_end_time, duration, duration_unit, status, notes, created_at
+            ) VALUES (
+                p_trx_id,
+                p_unit_id,
+                v_prod_id,
+                COALESCE(v_custom_nama, 'Barang Sewa'),
+                'rental',
+                (SELECT customer_name FROM transactions WHERE id = p_trx_id),
+                now(),
+                CASE 
+                    WHEN LOWER(v_unit_durasi) = 'hari' THEN now() + (v_durasi || ' days')::INTERVAL
+                    ELSE now() + (v_durasi || ' hours')::INTERVAL
+                END,
+                v_durasi,
+                COALESCE(v_unit_durasi, 'jam'),
+                'active',
+                v_catatan,
+                now()
+            );
+        ELSIF LOWER(v_tipe) = 'jasa' THEN
+            INSERT INTO rental_service_orders (
+                trx_id, unit_id, product_id, item_name, order_type, customer_name,
+                start_time, expected_end_time, duration, duration_unit, status, notes, created_at
+            ) VALUES (
+                p_trx_id,
+                p_unit_id,
+                v_prod_id,
+                COALESCE(v_custom_nama, 'Layanan Jasa'),
+                'service',
+                (SELECT customer_name FROM transactions WHERE id = p_trx_id),
+                now(),
+                now() + (v_durasi || ' hours')::INTERVAL,
+                v_durasi,
+                COALESCE(v_unit_durasi, 'jam'),
+                'in_progress',
+                v_catatan,
+                now()
+            );
+        END IF;
     END LOOP;
 
     -- 6. Update Shift Kasir Aktif
@@ -347,3 +423,117 @@ BEGIN
     p_pesan_out := 'Transfer ' || p_qty || ' unit produk berhasil dipindahkan.';
 END;
 $$ LANGUAGE plpgsql;
+
+
+-- ----------------------------------------------------------------------------
+-- 5. TABEL LIFECYCLE ORDER RENTAL & JASA
+-- ----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS rental_service_orders (
+    id SERIAL PRIMARY KEY,
+    trx_id INT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+    unit_id INT NOT NULL REFERENCES business_units(id) ON DELETE CASCADE,
+    product_id INT REFERENCES products(id) ON DELETE SET NULL,
+    item_name VARCHAR(150) NOT NULL,
+    order_type VARCHAR(30) NOT NULL, -- 'rental', 'service'
+    customer_name VARCHAR(150),
+    start_time TIMESTAMP NOT NULL DEFAULT now(),
+    expected_end_time TIMESTAMP NOT NULL,
+    actual_end_time TIMESTAMP,
+    duration INT NOT NULL DEFAULT 1,
+    duration_unit VARCHAR(20) NOT NULL DEFAULT 'jam',
+    status VARCHAR(30) NOT NULL, -- Rental: 'active', 'returned', 'overdue' | Jasa: 'queued', 'in_progress', 'ready', 'completed'
+    assigned_staff VARCHAR(100),
+    deposit_amount NUMERIC(14,2) DEFAULT 0,
+    penalty_fee NUMERIC(14,2) DEFAULT 0,
+    notes TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ix_rental_service_unit_status ON rental_service_orders(unit_id, status);
+CREATE INDEX IF NOT EXISTS ix_rental_service_product_active ON rental_service_orders(product_id, status);
+
+-- ----------------------------------------------------------------------------
+-- 6. SEED DATA DEFAULT (DATABASE SAMPLE DATA)
+-- Hanya di-insert jika database masih kosong untuk keperluan uji coba awal
+-- ----------------------------------------------------------------------------
+DO $$
+DECLARE
+    v_owner_id INT;
+    v_unit_toko INT;
+    v_unit_rental INT;
+    v_unit_jasa INT;
+    v_prod_kopi INT;
+    v_prod_snack INT;
+    v_prod_kamera INT;
+    v_prod_ps5 INT;
+    v_prod_cuci INT;
+    v_prod_servis INT;
+BEGIN
+    -- Cek jika tabel users belum memiliki owner
+    IF NOT EXISTS (SELECT 1 FROM users WHERE role = 'owner') THEN
+        INSERT INTO users (nama, email, password_hash, role, aktif, nama_perusahaan, tier, kuota_unit_usaha, sisa_kuota_ai)
+        VALUES (
+            'Pemilik Usaha',
+            'owner@multi-usaha.com',
+            '$2b$12$e8Ym1oKq/150gJvhY1rYze750E6Z.7eQZ4N0R6jXzRzM4J3iFwYmi', -- password default jika diperlukan
+            'owner',
+            true,
+            'PT Multi Niaga Nusantara',
+            'pro',
+            10,
+            250
+        ) RETURNING id INTO v_owner_id;
+
+        -- 1. Cabang Minimart / Toko Retail
+        INSERT INTO business_units (owner_id, nama, jenis_usaha, lokasi, kategori_portofolio, status, has_pos, pendapatan_bulan_ini, pengeluaran_bulan_ini, pertumbuhan_persen)
+        VALUES (v_owner_id, 'Minimart Cabang Merdeka', 'Retail & Kelontong', 'Jl. Merdeka No. 10', 'star', true, true, 4500000.00, 1500000.00, 12.5)
+        RETURNING id INTO v_unit_toko;
+
+        -- 2. Cabang Rental / Penyewaan
+        INSERT INTO business_units (owner_id, nama, jenis_usaha, lokasi, kategori_portofolio, status, has_pos, pendapatan_bulan_ini, pengeluaran_bulan_ini, pertumbuhan_persen)
+        VALUES (v_owner_id, 'Multi Rental Studio & Game', 'Rental & Penyewaan', 'Jl. Sudirman No. 45', 'cash_cow', true, true, 6200000.00, 1800000.00, 8.4)
+        RETURNING id INTO v_unit_rental;
+
+        -- 3. Cabang Jasa & Servis
+        INSERT INTO business_units (owner_id, nama, jenis_usaha, lokasi, kategori_portofolio, status, has_pos, pendapatan_bulan_ini, pengeluaran_bulan_ini, pertumbuhan_persen)
+        VALUES (v_owner_id, 'QuickFix Servis & Laundry', 'Jasa & Reparasi', 'Jl. Pemuda No. 8', 'question_mark', true, true, 3100000.00, 950000.00, 15.2)
+        RETURNING id INTO v_unit_jasa;
+
+        -- Produk Retail
+        INSERT INTO products (owner_id, sku, nama, kategori, harga_beli, harga_jual, satuan)
+        VALUES (v_owner_id, 'RET-001', 'Kopi Arabika 250gr', 'Minuman', 25000.00, 45000.00, 'pcs')
+        RETURNING id INTO v_prod_kopi;
+
+        INSERT INTO products (owner_id, sku, nama, kategori, harga_beli, harga_jual, satuan)
+        VALUES (v_owner_id, 'RET-002', 'Keripik Kentang Renyah', 'Makanan', 10000.00, 18000.00, 'pcs')
+        RETURNING id INTO v_prod_snack;
+
+        -- Produk Rental (Aset Sewa)
+        INSERT INTO products (owner_id, sku, nama, kategori, harga_beli, harga_jual, satuan)
+        VALUES (v_owner_id, 'RNT-001', 'Kamera Sony Alpha Mirrorless', 'Elektronik Rental', 8500000.00, 150000.00, 'hari')
+        RETURNING id INTO v_prod_kamera;
+
+        INSERT INTO products (owner_id, sku, nama, kategori, harga_beli, harga_jual, satuan)
+        VALUES (v_owner_id, 'RNT-002', 'PlayStation 5 Console + 2 Stick', 'Rental Game', 9000000.00, 25000.00, 'jam')
+        RETURNING id INTO v_prod_ps5;
+
+        -- Produk Jasa
+        INSERT INTO products (owner_id, sku, nama, kategori, harga_beli, harga_jual, satuan)
+        VALUES (v_owner_id, 'JSA-001', 'Cuci & Deep Clean Sepatu', 'Perawatan', 5000.00, 35000.00, 'pasang')
+        RETURNING id INTO v_prod_cuci;
+
+        INSERT INTO products (owner_id, sku, nama, kategori, harga_beli, harga_jual, satuan)
+        VALUES (v_owner_id, 'JSA-002', 'Servis AC & Cuci Freon', 'Jasa Servis', 20000.00, 85000.00, 'unit')
+        RETURNING id INTO v_prod_servis;
+
+        -- Masukkan ke Inventori Cabang Terkait
+        INSERT INTO inventories (unit_id, product_id, qty, min_stock, lokasi_rak)
+        VALUES 
+            (v_unit_toko, v_prod_kopi, 45, 10, 'Rak Minuman A1'),
+            (v_unit_toko, v_prod_snack, 60, 15, 'Rak Snack B2'),
+            (v_unit_rental, v_prod_kamera, 3, 1, 'Lemari Khusus L1'),
+            (v_unit_rental, v_prod_ps5, 4, 1, 'Meja Konsol K1'),
+            (v_unit_jasa, v_prod_cuci, 999, 10, 'Area Cuci'),
+            (v_unit_jasa, v_prod_servis, 999, 5, 'Area Teknisi');
+    END IF;
+END $$;

@@ -144,10 +144,21 @@ pub struct TutupShiftRequest {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CheckoutItemRequest {
-    pub produk_id: i64,
+    #[serde(default)]
+    pub produk_id: Option<i64>,
+    #[serde(default)]
+    pub nama: Option<String>,
+    #[serde(default)]
+    pub tipe: Option<String>, // 'barang', 'rental', 'jasa'
     pub jumlah: i32,
     #[serde(default)]
     pub harga_satuan: Option<f64>,
+    #[serde(default)]
+    pub durasi: Option<i32>,
+    #[serde(default)]
+    pub unit_durasi: Option<String>,
+    #[serde(default)]
+    pub catatan: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,6 +167,25 @@ pub struct CheckoutRequest {
     pub items: Vec<CheckoutItemRequest>,
     pub metode_pembayaran: String, // Tunai, QRIS, Transfer Bank
     pub keterangan: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReturnRentalRequest {
+    pub order_id: i64,
+    #[serde(default)]
+    pub penalty_fee: Option<f64>,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateServiceStatusRequest {
+    pub order_id: i64,
+    pub status: String, // 'queued', 'in_progress', 'ready', 'completed'
+    #[serde(default)]
+    pub assigned_staff: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -27,6 +27,12 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final auth = Provider.of<AuthProvider>(context, listen: false);
+      final unitId = auth.selectedUnitId;
+      context.read<GudangProvider>().fetchTransferFromApi(unitId: unitId);
+      context.read<GudangProvider>().fetchOpnameFromApi(unitId: unitId);
+    });
   }
 
   @override

@@ -12,8 +12,29 @@ import 'transaksi_screen.dart';
 import 'portofolio_screen.dart';
 import 'forecast_screen.dart';
 
-class ProdukScreen extends StatelessWidget {
+class ProdukScreen extends StatefulWidget {
   const ProdukScreen({super.key});
+
+  @override
+  State<ProdukScreen> createState() => _ProdukScreenState();
+}
+
+class _ProdukScreenState extends State<ProdukScreen> {
+  final TextEditingController _searchCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<ProdukProvider>().fetchProdukFromApi();
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
