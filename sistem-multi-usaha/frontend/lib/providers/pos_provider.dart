@@ -2,21 +2,57 @@ import 'package:flutter/material.dart';
 import '../models/produk.dart';
 import '../services/api_service.dart';
 
+enum ItemType { barang, rental, jasa }
+
 class CartItem {
-  final ProdukModel produk;
+  final String id; // Unique cart line ID
+  final ProdukModel? produk;
+  String customNama;
+  double customHarga;
   int kuantitas;
+  ItemType tipe;
+  int durasiSewa; // Contoh: durasi sewa (jam atau hari)
+  String unitDurasi; // 'jam', 'hari', 'sesi'
+  String catatan;
+  double diskonNominal;
 
-  CartItem({required this.produk, this.kuantitas = 1});
+  CartItem({
+    required this.id,
+    this.produk,
+    String? nama,
+    double? harga,
+    this.kuantitas = 1,
+    this.tipe = ItemType.barang,
+    this.durasiSewa = 1,
+    this.unitDurasi = 'jam',
+    this.catatan = '',
+    this.diskonNominal = 0.0,
+  })  : customNama = nama ?? produk?.nama ?? 'Item Khusus',
+        customHarga = harga ?? produk?.hargaJual ?? 0.0;
 
-  double get subtotal => produk.hargaJual * kuantitas;
+  double get hargaEfektif {
+    if (tipe == ItemType.rental) {
+      return (customHarga * (durasiSewa > 0 ? durasiSewa : 1));
+    }
+    return customHarga;
+  }
+
+  double get subtotal {
+    final raw = (hargaEfektif * kuantitas) - diskonNominal;
+    return raw > 0 ? raw : 0.0;
+  }
 }
 
 enum MetodeBayar { tunai, qris, transferBank, kartuDebit }
+enum ModeOperasiKasir { retail, rental, jasa, fleksibel }
 
 class PosProvider extends ChangeNotifier {
   final List<CartItem> _keranjang = [];
   double _diskonPersen = 0.0;
   MetodeBayar _metodeBayar = MetodeBayar.qris;
+  ModeOperasiKasir _modeOperasi = ModeOperasiKasir.fleksibel;
+  String _namaPelanggan = '';
+  String _catatanTransaksi = '';
   bool _isOfflineMode = false;
   int _offlineQueueCount = 0;
   int _activeUnitId = 0;
@@ -35,6 +71,9 @@ class PosProvider extends ChangeNotifier {
   List<CartItem> get keranjang => _keranjang;
   double get diskonPersen => _diskonPersen;
   MetodeBayar get metodeBayar => _metodeBayar;
+  ModeOperasiKasir get modeOperasi => _modeOperasi;
+  String get namaPelanggan => _namaPelanggan;
+  String get catatanTransaksi => _catatanTransaksi;
   bool get isOfflineMode => _isOfflineMode;
   int get offlineQueueCount => _offlineQueueCount;
   int get activeUnitId => _activeUnitId;
@@ -47,6 +86,21 @@ class PosProvider extends ChangeNotifier {
   int get totalTransaksiShift => _totalTransaksiShift;
   String get waktuBukaShift => _waktuBukaShift;
   bool get shiftIsOpen => _shiftIsOpen;
+
+  void setModeOperasi(ModeOperasiKasir mode) {
+    _modeOperasi = mode;
+    notifyListeners();
+  }
+
+  void setPelanggan(String nama) {
+    _namaPelanggan = nama;
+    notifyListeners();
+  }
+
+  void setCatatanTransaksi(String catatan) {
+    _catatanTransaksi = catatan;
+    notifyListeners();
+  }
 
   // 1. Ambil status shift dari PostgreSQL via API
   Future<void> initShiftStatus(int unitId) async {
@@ -124,20 +178,49 @@ class PosProvider extends ChangeNotifier {
   Future<bool> checkoutAPI(int unitId, String metodeBayarStr, {String? keterangan}) async {
     if (_keranjang.isEmpty) return false;
 
+    // Untuk item yang terikat produk database, kirim ID produk.
+    // Untuk item kustom ad-hoc / jasa / sewa tanpa id produk, fallback menggunakan produk id pertama atau dicatat di note.
     final itemsPayload = _keranjang.map((c) {
       return {
-        'produk_id': c.produk.id,
+        'produk_id': c.produk?.id ?? 0,
         'jumlah': c.kuantitas,
-        'harga_satuan': c.produk.hargaJual,
+        'harga_satuan': c.hargaEfektif,
       };
     }).toList();
+
+    final detailCatatan = StringBuffer();
+    if (_namaPelanggan.trim().isNotEmpty) {
+      detailCatatan.write('Pelanggan: ${_namaPelanggan.trim()} | ');
+    }
+    if (_modeOperasi != ModeOperasiKasir.fleksibel) {
+      detailCatatan.write('Mode: ${_modeOperasi.name.toUpperCase()} | ');
+    }
+    if (_catatanTransaksi.trim().isNotEmpty) {
+      detailCatatan.write('Catatan: ${_catatanTransaksi.trim()} | ');
+    }
+
+    final customItems = _keranjang.where((c) => c.produk == null || c.tipe != ItemType.barang || c.catatan.isNotEmpty);
+    if (customItems.isNotEmpty) {
+      detailCatatan.write('Rincian: ');
+      for (final item in customItems) {
+        detailCatatan.write(
+          '[${item.tipe.name.toUpperCase()}] ${item.customNama} '
+          '(${item.tipe == ItemType.rental ? '${item.durasiSewa} ${item.unitDurasi}, ' : ''}'
+          'Rp ${item.hargaEfektif.toInt()} x ${item.kuantitas}'
+          '${item.catatan.isNotEmpty ? ', ket: ${item.catatan}' : ''}); ',
+        );
+      }
+    }
+
+    final finalKeterangan = (keterangan ?? '') +
+        (detailCatatan.isNotEmpty ? ' [${detailCatatan.toString().trim()}]' : '');
 
     try {
       final res = await ApiService.post('/pos/checkout', {
         'unit_id': unitId,
         'items': itemsPayload,
         'metode_pembayaran': metodeBayarStr,
-        'keterangan': keterangan ?? 'Order Kasir POS',
+        'keterangan': finalKeterangan.trim(),
       });
 
       if (res != null && res['status'] == 'success') {
@@ -178,18 +261,97 @@ class PosProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void tambahKeKeranjang(ProdukModel produk) {
-    final idx = _keranjang.indexWhere((item) => item.produk.id == produk.id);
+  void tambahKeKeranjang(ProdukModel produk, {ItemType tipe = ItemType.barang, int durasi = 1, String unitDurasi = 'jam'}) {
+    final cartItemId = 'prod_${produk.id}_${tipe.name}';
+    final idx = _keranjang.indexWhere((item) => item.id == cartItemId);
     if (idx != -1) {
       _keranjang[idx].kuantitas++;
     } else {
-      _keranjang.add(CartItem(produk: produk, kuantitas: 1));
+      _keranjang.add(CartItem(
+        id: cartItemId,
+        produk: produk,
+        nama: produk.nama,
+        harga: produk.hargaJual,
+        kuantitas: 1,
+        tipe: tipe,
+        durasiSewa: durasi,
+        unitDurasi: unitDurasi,
+      ));
     }
     notifyListeners();
   }
 
+  // Tambah item custom langsung (misal: jasa servis, sewa lapangan/alat, atau item non-katalog)
+  void tambahItemKustom({
+    required String nama,
+    required double harga,
+    int kuantitas = 1,
+    ItemType tipe = ItemType.barang,
+    int durasi = 1,
+    String unitDurasi = 'jam',
+    String catatan = '',
+  }) {
+    final cartItemId = 'custom_${DateTime.now().millisecondsSinceEpoch}';
+    _keranjang.add(CartItem(
+      id: cartItemId,
+      nama: nama,
+      harga: harga,
+      kuantitas: kuantitas,
+      tipe: tipe,
+      durasiSewa: durasi,
+      unitDurasi: unitDurasi,
+      catatan: catatan,
+    ));
+    notifyListeners();
+  }
+
+  void updateCartItem(
+    String cartId, {
+    String? nama,
+    double? harga,
+    int? kuantitas,
+    ItemType? tipe,
+    int? durasiSewa,
+    String? unitDurasi,
+    String? catatan,
+    double? diskonNominal,
+  }) {
+    final idx = _keranjang.indexWhere((item) => item.id == cartId);
+    if (idx != -1) {
+      if (nama != null) _keranjang[idx].customNama = nama;
+      if (harga != null) _keranjang[idx].customHarga = harga;
+      if (kuantitas != null) _keranjang[idx].kuantitas = kuantitas;
+      if (tipe != null) _keranjang[idx].tipe = tipe;
+      if (durasiSewa != null) _keranjang[idx].durasiSewa = durasiSewa;
+      if (unitDurasi != null) _keranjang[idx].unitDurasi = unitDurasi;
+      if (catatan != null) _keranjang[idx].catatan = catatan;
+      if (diskonNominal != null) _keranjang[idx].diskonNominal = diskonNominal;
+
+      if (_keranjang[idx].kuantitas <= 0) {
+        _keranjang.removeAt(idx);
+      }
+      notifyListeners();
+    }
+  }
+
+  void hapusItemKeranjang(String cartId) {
+    _keranjang.removeWhere((item) => item.id == cartId);
+    notifyListeners();
+  }
+
+  void ubahKuantitasById(String cartId, int delta) {
+    final idx = _keranjang.indexWhere((item) => item.id == cartId);
+    if (idx != -1) {
+      _keranjang[idx].kuantitas += delta;
+      if (_keranjang[idx].kuantitas <= 0) {
+        _keranjang.removeAt(idx);
+      }
+      notifyListeners();
+    }
+  }
+
   void ubahKuantitas(int produkId, int delta) {
-    final idx = _keranjang.indexWhere((item) => item.produk.id == produkId);
+    final idx = _keranjang.indexWhere((item) => item.produk?.id == produkId);
     if (idx != -1) {
       _keranjang[idx].kuantitas += delta;
       if (_keranjang[idx].kuantitas <= 0) {
@@ -222,6 +384,8 @@ class PosProvider extends ChangeNotifier {
     _totalTransaksiShift++;
     _keranjang.clear();
     _diskonPersen = 0;
+    _namaPelanggan = '';
+    _catatanTransaksi = '';
     notifyListeners();
   }
 

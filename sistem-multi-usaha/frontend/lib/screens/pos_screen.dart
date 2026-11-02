@@ -134,6 +134,51 @@ class _PosScreenState extends State<PosScreen> {
           ],
         ),
         actions: [
+          // Pilihan Mode Operasional Kasir (Retail Toko, Rental/Sewa, Jasa/Layanan, Fleksibel)
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            decoration: BoxDecoration(
+              color: AppTheme.lightBlueBg,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppTheme.secondaryBlue.withAlpha(80)),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<ModeOperasiKasir>(
+                value: pos.modeOperasi,
+                icon: const Icon(Icons.tune_rounded, size: 16, color: AppTheme.primaryBlue),
+                items: const [
+                  DropdownMenuItem(
+                    value: ModeOperasiKasir.fleksibel,
+                    child: Text('⚙️ Mode Fleksibel (Semua)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryBlue)),
+                  ),
+                  DropdownMenuItem(
+                    value: ModeOperasiKasir.retail,
+                    child: Text('🏪 Toko / Minimart (Retail)', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryBlue)),
+                  ),
+                  DropdownMenuItem(
+                    value: ModeOperasiKasir.rental,
+                    child: Text('⏱️ Rental / Sewa Barang', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryBlue)),
+                  ),
+                  DropdownMenuItem(
+                    value: ModeOperasiKasir.jasa,
+                    child: Text('🛠️ Jasa / Layanan & Servis', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryBlue)),
+                  ),
+                ],
+                onChanged: (val) {
+                  if (val != null) {
+                    pos.setModeOperasi(val);
+                  }
+                },
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton(
+            tooltip: 'Tambah Item Ad-Hoc / Custom Manual',
+            icon: const Icon(Icons.add_shopping_cart_rounded, color: AppTheme.accentGreen),
+            onPressed: () => _showTambahItemCustomDialog(context),
+          ),
           IconButton(
             tooltip: 'Ringkasan / Dashboard Shift',
             icon: const Icon(Icons.pie_chart_outline_rounded, color: AppTheme.primaryBlue),
@@ -274,6 +319,18 @@ class _PosScreenState extends State<PosScreen> {
         ),
         const SizedBox(width: 10),
         ElevatedButton.icon(
+          onPressed: () => _showTambahItemCustomDialog(context),
+          icon: const Icon(Icons.flash_on_rounded, size: 16),
+          label: const Text('Input Manual / Jasa / Sewa', style: TextStyle(fontSize: 12)),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppTheme.accentGreen,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          ),
+        ),
+        const SizedBox(width: 10),
+        ElevatedButton.icon(
           onPressed: () => _showTambahBarangDialog(context),
           icon: Icon(
             context.watch<AuthProvider>().canManagePrices
@@ -395,46 +452,147 @@ class _PosScreenState extends State<PosScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text('Pesanan Pelanggan', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-              Text('${pos.keranjang.length} item', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Pesanan Pelanggan', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  Text(
+                    'Mode: ${pos.modeOperasi.name.toUpperCase()}',
+                    style: const TextStyle(fontSize: 11, color: AppTheme.primaryBlue, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  IconButton(
+                    tooltip: 'Atur Pelanggan / Catatan',
+                    icon: const Icon(Icons.person_add_alt_1_rounded, size: 20, color: AppTheme.primaryBlue),
+                    onPressed: () => _showAturPelangganModal(context),
+                  ),
+                  Text('${pos.keranjang.length} item', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+                ],
+              ),
             ],
           ),
+          if (pos.namaPelanggan.isNotEmpty || pos.catatanTransaksi.isNotEmpty)
+            Container(
+              margin: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppTheme.lightBlueBg,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline, size: 14, color: AppTheme.primaryBlue),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '${pos.namaPelanggan.isNotEmpty ? 'Pelanggan: ${pos.namaPelanggan} ' : ''}${pos.catatanTransaksi.isNotEmpty ? '(${pos.catatanTransaksi})' : ''}',
+                      style: const TextStyle(fontSize: 11, color: AppTheme.primaryBlue, fontWeight: FontWeight.w600),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           const Divider(height: 20, color: AppTheme.cardBorder),
           Expanded(
             child: pos.keranjang.isEmpty
-                ? const Center(child: Text('Keranjang kosong. Klik produk di sebelah kiri.', style: TextStyle(color: AppTheme.textMuted)))
+                ? const Center(child: Text('Keranjang kosong. Klik produk di sebelah kiri atau klik "Input Manual / Jasa / Sewa".', textAlign: TextAlign.center, style: TextStyle(color: AppTheme.textMuted)))
                 : ListView.separated(
                     itemCount: pos.keranjang.length,
                     separatorBuilder: (_, __) => const Divider(height: 12, color: AppTheme.cardBorder),
                     itemBuilder: (context, index) {
                       final c = pos.keranjang[index];
-                      return Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(c.produk.nama, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                                Text(currency.format(c.produk.hargaJual), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-                              ],
-                            ),
-                          ),
-                          Row(
+                      return InkWell(
+                        onTap: () => _showEditCartItemDialog(context, c),
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                          child: Row(
                             children: [
-                              IconButton(
-                                icon: const Icon(Icons.remove_circle_outline, size: 18, color: AppTheme.textSecondary),
-                                onPressed: () => pos.ubahKuantitas(c.produk.id, -1),
+                              // Icon penanda tipe (Barang, Rental, Jasa)
+                              Container(
+                                padding: const EdgeInsets.all(6),
+                                decoration: BoxDecoration(
+                                  color: c.tipe == ItemType.rental
+                                      ? const Color(0xFFFEF3C7)
+                                      : c.tipe == ItemType.jasa
+                                          ? const Color(0xFFE0E7FF)
+                                          : AppTheme.lightBlueBg,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Icon(
+                                  c.tipe == ItemType.rental
+                                      ? Icons.timer_outlined
+                                      : c.tipe == ItemType.jasa
+                                          ? Icons.build_circle_outlined
+                                          : Icons.shopping_bag_outlined,
+                                  size: 16,
+                                  color: c.tipe == ItemType.rental
+                                      ? const Color(0xFFD97706)
+                                      : c.tipe == ItemType.jasa
+                                          ? const Color(0xFF4338CA)
+                                          : AppTheme.primaryBlue,
+                                ),
                               ),
-                              Text('${c.kuantitas}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                              IconButton(
-                                icon: const Icon(Icons.add_circle_outline, size: 18, color: AppTheme.primaryBlue),
-                                onPressed: () => pos.ubahKuantitas(c.produk.id, 1),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Flexible(
+                                          child: Text(
+                                            c.customNama,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        const Icon(Icons.edit_note_rounded, size: 14, color: AppTheme.textMuted),
+                                      ],
+                                    ),
+                                    Text(
+                                      c.tipe == ItemType.rental
+                                          ? '${currency.format(c.customHarga)} / ${c.unitDurasi} (x ${c.durasiSewa} ${c.unitDurasi})'
+                                          : currency.format(c.customHarga),
+                                      style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                                    ),
+                                    if (c.catatan.isNotEmpty)
+                                      Text(
+                                        'Ket: ${c.catatan}',
+                                        style: const TextStyle(fontSize: 10, color: AppTheme.textMuted, fontStyle: FontStyle.italic),
+                                      ),
+                                    if (c.diskonNominal > 0)
+                                      Text(
+                                        'Diskon item: -${currency.format(c.diskonNominal)}',
+                                        style: const TextStyle(fontSize: 10, color: Color(0xFFDC2626), fontWeight: FontWeight.bold),
+                                      ),
+                                  ],
+                                ),
                               ),
+                              Row(
+                                children: [
+                                  IconButton(
+                                    icon: const Icon(Icons.remove_circle_outline, size: 18, color: AppTheme.textSecondary),
+                                    onPressed: () => pos.ubahKuantitasById(c.id, -1),
+                                  ),
+                                  Text('${c.kuantitas}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                                  IconButton(
+                                    icon: const Icon(Icons.add_circle_outline, size: 18, color: AppTheme.primaryBlue),
+                                    onPressed: () => pos.ubahKuantitasById(c.id, 1),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(width: 8),
+                              Text(currency.format(c.subtotal), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                             ],
                           ),
-                          const SizedBox(width: 8),
-                          Text(currency.format(c.subtotal), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                        ],
+                        ),
                       );
                     },
                   ),
@@ -533,31 +691,95 @@ class _PosScreenState extends State<PosScreen> {
           ],
         ),
         content: SizedBox(
-          width: 320,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text('KEDAI KOPI & MULTI USAHA', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-              const Text('Jl. Merdeka No. 12 • Telp: 08123456789', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-              const Divider(height: 20),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('Total Transaksi', style: TextStyle(fontSize: 13)),
-                  Text(currency.format(total), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+          width: 360,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Column(
+                    children: [
+                      Text(pos.activeUnitNama.isNotEmpty ? pos.activeUnitNama.toUpperCase() : 'MULTI USAHA POS', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                      Text('Sistem Kasir Serbaguna • Mode: ${pos.modeOperasi.name.toUpperCase()}', style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                    ],
+                  ),
+                ),
+                if (pos.namaPelanggan.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text('Pelanggan: ${pos.namaPelanggan}', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                 ],
-              ),
-              const SizedBox(height: 6),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text('Metode', style: TextStyle(fontSize: 13)),
-                  Text(pos.metodeBayar.name.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                const Divider(height: 20),
+                // Daftar item belanja
+                ...pos.keranjang.map((item) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '[${item.tipe.name.toUpperCase()}] ${item.customNama}',
+                                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+                              ),
+                              if (item.tipe == ItemType.rental)
+                                Text('Durasi: ${item.durasiSewa} ${item.unitDurasi} @ ${currency.format(item.customHarga)}', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+                              if (item.catatan.isNotEmpty)
+                                Text('Catatan: ${item.catatan}', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted, fontStyle: FontStyle.italic)),
+                              if (item.diskonNominal > 0)
+                                Text('Diskon item: -${currency.format(item.diskonNominal)}', style: const TextStyle(fontSize: 10, color: Color(0xFFDC2626))),
+                            ],
+                          ),
+                        ),
+                        Text(
+                          '${item.kuantitas}x  ${currency.format(item.subtotal)}',
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+                const Divider(height: 20),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Subtotal', style: TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+                    Text(currency.format(pos.subtotal), style: const TextStyle(fontSize: 12)),
+                  ],
+                ),
+                if (pos.diskonPersen > 0) ...[
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Diskon Global (${pos.diskonPersen.toInt()}%)', style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626))),
+                      Text('- ${currency.format(pos.nominalDiskon)}', style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626), fontWeight: FontWeight.bold)),
+                    ],
+                  ),
                 ],
-              ),
-              const Divider(height: 20),
-              const Text('Struk dapat dikirim via printer thermal 58/80mm atau digital PDF/WhatsApp.', textAlign: TextAlign.center, style: TextStyle(fontSize: 11, color: AppTheme.textMuted)),
-            ],
+                const SizedBox(height: 6),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Total Transaksi', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                    Text(currency.format(total), style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: AppTheme.primaryBlue)),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Metode Pembayaran', style: TextStyle(fontSize: 12)),
+                    Text(pos.metodeBayar.name.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                  ],
+                ),
+                const Divider(height: 20),
+                const Text('Struk dapat dicetak ke printer Bluetooth thermal 58/80mm atau dikirim ke WhatsApp.', textAlign: TextAlign.center, style: TextStyle(fontSize: 11, color: AppTheme.textMuted)),
+              ],
+            ),
           ),
         ),
         actions: [
@@ -1318,6 +1540,445 @@ class _PosScreenState extends State<PosScreen> {
             ],
           );
         },
+      ),
+    );
+  }
+
+  // =========================================================================
+  // FITUR EDITABLE KASIR: EDIT ITEM, CUSTOM ITEM & ATUR PELANGGAN
+  // =========================================================================
+
+  // 1. DIALOG INPUT ITEM CUSTOM / AD-HOC (JASA, SEWA, ATAU BARANG MANUAL)
+  void _showTambahItemCustomDialog(BuildContext context) {
+    final pos = Provider.of<PosProvider>(context, listen: false);
+    final namaCtrl = TextEditingController();
+    final hargaCtrl = TextEditingController();
+    final qtyCtrl = TextEditingController(text: '1');
+    final durasiCtrl = TextEditingController(text: '1');
+    final catatanCtrl = TextEditingController();
+
+    ItemType selectedTipe = pos.modeOperasi == ModeOperasiKasir.rental
+        ? ItemType.rental
+        : pos.modeOperasi == ModeOperasiKasir.jasa
+            ? ItemType.jasa
+            : ItemType.barang;
+
+    String selectedUnitDurasi = 'jam';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModalState) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: const [
+                Icon(Icons.edit_note_rounded, color: AppTheme.primaryBlue),
+                SizedBox(width: 8),
+                Text('Tambah Item Kasir Fleksibel', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              ],
+            ),
+            content: SizedBox(
+              width: 380,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Tipe Item / Layanan:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textSecondary)),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        ChoiceChip(
+                          label: const Text('📦 Barang/Retail'),
+                          selected: selectedTipe == ItemType.barang,
+                          onSelected: (_) => setModalState(() => selectedTipe = ItemType.barang),
+                        ),
+                        const SizedBox(width: 6),
+                        ChoiceChip(
+                          label: const Text('⏱️ Rental/Sewa'),
+                          selected: selectedTipe == ItemType.rental,
+                          onSelected: (_) => setModalState(() => selectedTipe = ItemType.rental),
+                        ),
+                        const SizedBox(width: 6),
+                        ChoiceChip(
+                          label: const Text('🛠️ Jasa/Servis'),
+                          selected: selectedTipe == ItemType.jasa,
+                          onSelected: (_) => setModalState(() => selectedTipe = ItemType.jasa),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: namaCtrl,
+                      decoration: InputDecoration(
+                        labelText: selectedTipe == ItemType.rental
+                            ? 'Nama Barang Sewa (misal: Kamera DSLR, PS5, Meja Biliar)'
+                            : selectedTipe == ItemType.jasa
+                                ? 'Nama Jasa (misal: Cuci Sepatu, Servis AC, Antar Barang)'
+                                : 'Nama Barang / Produk',
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: hargaCtrl,
+                            keyboardType: TextInputType.number,
+                            decoration: InputDecoration(
+                              labelText: selectedTipe == ItemType.rental
+                                  ? 'Tarif Sewa (Rp)'
+                                  : 'Harga Satuan (Rp)',
+                              border: const OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        SizedBox(
+                          width: 90,
+                          child: TextField(
+                            controller: qtyCtrl,
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'Jumlah',
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (selectedTipe == ItemType.rental) ...[
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: durasiCtrl,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                labelText: 'Lama / Durasi',
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          DropdownButton<String>(
+                            value: selectedUnitDurasi,
+                            items: const [
+                              DropdownMenuItem(value: 'jam', child: Text('Jam')),
+                              DropdownMenuItem(value: 'hari', child: Text('Hari')),
+                              DropdownMenuItem(value: 'sesi', child: Text('Sesi / Round')),
+                            ],
+                            onChanged: (val) {
+                              if (val != null) {
+                                setModalState(() => selectedUnitDurasi = val);
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: catatanCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Catatan Khusus (misal: No Plat / Seri / No Meja)',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryBlue),
+                onPressed: () {
+                  final nama = namaCtrl.text.trim();
+                  final harga = double.tryParse(hargaCtrl.text) ?? 0.0;
+                  final qty = int.tryParse(qtyCtrl.text) ?? 1;
+                  final durasi = int.tryParse(durasiCtrl.text) ?? 1;
+
+                  if (nama.isEmpty || harga <= 0) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Nama dan harga valid wajib diisi!')),
+                    );
+                    return;
+                  }
+
+                  pos.tambahItemKustom(
+                    nama: nama,
+                    harga: harga,
+                    kuantitas: qty,
+                    tipe: selectedTipe,
+                    durasi: durasi,
+                    unitDurasi: selectedUnitDurasi,
+                    catatan: catatanCtrl.text.trim(),
+                  );
+
+                  Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      backgroundColor: AppTheme.accentGreen,
+                      content: Text('Item "$nama" (${selectedTipe.name.toUpperCase()}) ditambahkan ke keranjang!'),
+                    ),
+                  );
+                },
+                child: const Text('Tambahkan ke Kasir'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // 2. DIALOG EDIT DETAIL ITEM DI KERANJANG (HARGA, NAMA, DISKON ITEM, DURASI, CATATAN)
+  void _showEditCartItemDialog(BuildContext context, CartItem item) {
+    final pos = Provider.of<PosProvider>(context, listen: false);
+    final namaCtrl = TextEditingController(text: item.customNama);
+    final hargaCtrl = TextEditingController(text: item.customHarga.round().toString());
+    final qtyCtrl = TextEditingController(text: item.kuantitas.toString());
+    final durasiCtrl = TextEditingController(text: item.durasiSewa.toString());
+    final catatanCtrl = TextEditingController(text: item.catatan);
+    final diskonItemCtrl = TextEditingController(
+      text: item.diskonNominal > 0 ? item.diskonNominal.round().toString() : '0',
+    );
+
+    ItemType curTipe = item.tipe;
+    String curUnitDurasi = item.unitDurasi;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setModalState) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: Row(
+              children: const [
+                Icon(Icons.tune_rounded, color: AppTheme.primaryBlue),
+                SizedBox(width: 8),
+                Text('Modifikasi Item Kasir', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              ],
+            ),
+            content: SizedBox(
+              width: 380,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Model Transaksi Item Ini:', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textSecondary)),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        ChoiceChip(
+                          label: const Text('📦 Barang'),
+                          selected: curTipe == ItemType.barang,
+                          onSelected: (_) => setModalState(() => curTipe = ItemType.barang),
+                        ),
+                        const SizedBox(width: 6),
+                        ChoiceChip(
+                          label: const Text('⏱️ Sewa'),
+                          selected: curTipe == ItemType.rental,
+                          onSelected: (_) => setModalState(() => curTipe = ItemType.rental),
+                        ),
+                        const SizedBox(width: 6),
+                        ChoiceChip(
+                          label: const Text('🛠️ Jasa'),
+                          selected: curTipe == ItemType.jasa,
+                          onSelected: (_) => setModalState(() => curTipe = ItemType.jasa),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: namaCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Label / Nama Item',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: hargaCtrl,
+                            keyboardType: TextInputType.number,
+                            decoration: InputDecoration(
+                              labelText: curTipe == ItemType.rental ? 'Tarif Sewa (Rp)' : 'Harga Satuan (Rp)',
+                              border: const OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        SizedBox(
+                          width: 80,
+                          child: TextField(
+                            controller: qtyCtrl,
+                            keyboardType: TextInputType.number,
+                            decoration: const InputDecoration(
+                              labelText: 'Qty',
+                              border: OutlineInputBorder(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (curTipe == ItemType.rental) ...[
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: durasiCtrl,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                labelText: 'Lama Sewa',
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          DropdownButton<String>(
+                            value: curUnitDurasi,
+                            items: const [
+                              DropdownMenuItem(value: 'jam', child: Text('Jam')),
+                              DropdownMenuItem(value: 'hari', child: Text('Hari')),
+                              DropdownMenuItem(value: 'sesi', child: Text('Sesi')),
+                            ],
+                            onChanged: (val) {
+                              if (val != null) {
+                                setModalState(() => curUnitDurasi = val);
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: diskonItemCtrl,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: 'Potongan / Diskon Spesial Item (Rp)',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.discount_outlined, color: Color(0xFFDC2626)),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: catatanCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Catatan Spesifik (No Meja, Keterangan, dll)',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton.icon(
+                style: TextButton.styleFrom(foregroundColor: const Color(0xFFDC2626)),
+                icon: const Icon(Icons.delete_outline_rounded, size: 16),
+                label: const Text('Hapus Item'),
+                onPressed: () {
+                  pos.hapusItemKeranjang(item.id);
+                  Navigator.pop(ctx);
+                },
+              ),
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
+              ElevatedButton(
+                onPressed: () {
+                  final newNama = namaCtrl.text.trim();
+                  final newHarga = double.tryParse(hargaCtrl.text) ?? item.customHarga;
+                  final newQty = int.tryParse(qtyCtrl.text) ?? item.kuantitas;
+                  final newDurasi = int.tryParse(durasiCtrl.text) ?? item.durasiSewa;
+                  final newDiskon = double.tryParse(diskonItemCtrl.text) ?? 0.0;
+
+                  pos.updateCartItem(
+                    item.id,
+                    nama: newNama.isNotEmpty ? newNama : item.customNama,
+                    harga: newHarga,
+                    kuantitas: newQty,
+                    tipe: curTipe,
+                    durasiSewa: newDurasi,
+                    unitDurasi: curUnitDurasi,
+                    catatan: catatanCtrl.text.trim(),
+                    diskonNominal: newDiskon,
+                  );
+
+                  Navigator.pop(ctx);
+                },
+                child: const Text('Simpan Perubahan'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // 3. DIALOG ATUR NAMA PELANGGAN & CATATAN NOTA ORDER
+  void _showAturPelangganModal(BuildContext context) {
+    final pos = Provider.of<PosProvider>(context, listen: false);
+    final custCtrl = TextEditingController(text: pos.namaPelanggan);
+    final noteCtrl = TextEditingController(text: pos.catatanTransaksi);
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: const [
+            Icon(Icons.person_pin_rounded, color: AppTheme.primaryBlue),
+            SizedBox(width: 8),
+            Text('Informasi Pelanggan & Meja', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          ],
+        ),
+        content: SizedBox(
+          width: 340,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: custCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Nama Pelanggan / Nomor HP',
+                  hintText: 'Bpk. Budi / 08123...',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.person_outline),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: noteCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Nomor Meja / Kamar / Catatan Khusus',
+                  hintText: 'Meja 05 / Rental Sepeda No. 2',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.notes_rounded),
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
+          ElevatedButton(
+            onPressed: () {
+              pos.setPelanggan(custCtrl.text.trim());
+              pos.setCatatanTransaksi(noteCtrl.text.trim());
+              Navigator.pop(ctx);
+            },
+            child: const Text('Simpan'),
+          ),
+        ],
       ),
     );
   }
