@@ -6,12 +6,15 @@ class PermintaanStokProvider extends ChangeNotifier {
   // Data permintaan stok yang disinkronkan langsung dari PostgreSQL backend
   List<PermintaanStokModel> _daftarPermintaan = [];
   bool _isLoading = false;
+  String? _lastError;
 
   List<PermintaanStokModel> get daftarPermintaan => _daftarPermintaan;
   bool get isLoading => _isLoading;
+  String? get lastError => _lastError;
 
   Future<void> fetchPermintaanFromApi({int? unitId}) async {
     _isLoading = true;
+    _lastError = null;
     notifyListeners();
     try {
       final endpoint = (unitId != null && unitId > 0) ? '/gudang/permintaan?unit_id=$unitId' : '/gudang/permintaan';
@@ -37,13 +40,19 @@ class PermintaanStokProvider extends ChangeNotifier {
             status: stEnum,
           );
         }).toList();
+      } else if (res != null && res['status'] == 'error') {
+        _lastError = res['message'] as String?;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('PermintaanStokProvider.fetchPermintaanFromApi error: $e');
+      _lastError = 'Gagal memuat permintaan stok: $e';
+    }
     _isLoading = false;
     notifyListeners();
   }
 
   Future<bool> ajukanPermintaan(PermintaanStokModel permintaan) async {
+    _lastError = null;
     try {
       final res = await ApiService.post('/gudang/permintaan', {
         'unit_id': permintaan.unitId,
@@ -55,14 +64,18 @@ class PermintaanStokProvider extends ChangeNotifier {
         await fetchPermintaanFromApi(unitId: permintaan.unitId);
         return true;
       }
-    } catch (_) {}
+      _lastError = res?['message'] as String? ?? 'Gagal mengajukan permintaan stok.';
+    } catch (e) {
+      debugPrint('PermintaanStokProvider.ajukanPermintaan error: $e');
+      _lastError = 'Gagal mengajukan permintaan stok: $e';
+    }
 
-    _daftarPermintaan.insert(0, permintaan);
     notifyListeners();
-    return true;
+    return false;
   }
 
   Future<bool> setujuiPermintaan(int id) async {
+    _lastError = null;
     try {
       final res = await ApiService.patch('/gudang/permintaan/$id/status', {
         'status': 'disetujui',
@@ -75,17 +88,18 @@ class PermintaanStokProvider extends ChangeNotifier {
         }
         return true;
       }
-    } catch (_) {}
-
-    final idx = _daftarPermintaan.indexWhere((p) => p.id == id);
-    if (idx != -1) {
-      _daftarPermintaan[idx].status = StatusPermintaanStok.disetujui;
-      notifyListeners();
+      _lastError = res?['message'] as String? ?? 'Gagal menyetujui permintaan stok.';
+    } catch (e) {
+      debugPrint('PermintaanStokProvider.setujuiPermintaan error: $e');
+      _lastError = 'Gagal menyetujui permintaan stok: $e';
     }
+
+    notifyListeners();
     return false;
   }
 
   Future<bool> tolakPermintaan(int id) async {
+    _lastError = null;
     try {
       final res = await ApiService.patch('/gudang/permintaan/$id/status', {
         'status': 'ditolak',
@@ -98,13 +112,13 @@ class PermintaanStokProvider extends ChangeNotifier {
         }
         return true;
       }
-    } catch (_) {}
-
-    final idx = _daftarPermintaan.indexWhere((p) => p.id == id);
-    if (idx != -1) {
-      _daftarPermintaan[idx].status = StatusPermintaanStok.ditolak;
-      notifyListeners();
+      _lastError = res?['message'] as String? ?? 'Gagal menolak permintaan stok.';
+    } catch (e) {
+      debugPrint('PermintaanStokProvider.tolakPermintaan error: $e');
+      _lastError = 'Gagal menolak permintaan stok: $e';
     }
+
+    notifyListeners();
     return false;
   }
 }

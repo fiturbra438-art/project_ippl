@@ -1,15 +1,15 @@
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::IntoResponse,
     Json,
 };
 use chrono::Local;
 use std::sync::Arc;
 
-use crate::auth::require_claims;
 use crate::models::{
-    PermintaanStokModel, StatusPermintaanStok, StatusTransfer, StokOpnameModel, TransferStokModel,
+    Claims, PermintaanStokModel, StatusPermintaanStok, StatusTransfer, StokOpnameModel,
+    TransferStokModel,
 };
 use crate::schemas::{
     ApiResponse, CreatePermintaanStokRequest, CreateStokOpnameRequest, CreateTransferStokRequest,
@@ -21,12 +21,8 @@ use crate::state::AppState;
 
 pub async fn list_permintaan_stok(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
 
     let rows = sqlx::query_as::<_, (i32, i32, i32, String, String, String, i32, Option<String>, chrono::NaiveDateTime, String)>(
@@ -79,13 +75,9 @@ pub async fn list_permintaan_stok(
 
 pub async fn create_permintaan_stok(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Json(payload): Json<CreatePermintaanStokRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
     let pemohon = claims.sub.clone();
 
@@ -173,15 +165,10 @@ pub async fn create_permintaan_stok(
 
 pub async fn update_status_permintaan(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Path(id): Path<i64>,
     Json(payload): Json<UpdateStatusPermintaanRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
-
     let status_str = format!("{:?}", payload.status).to_lowercase();
     let res = sqlx::query("UPDATE stock_requests SET status = $1 WHERE id = $2 AND owner_id = $3")
         .bind(&status_str)
@@ -219,12 +206,8 @@ pub async fn update_status_permintaan(
 
 pub async fn list_stok_opname(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
 
     let rows = sqlx::query_as::<_, (i32, i32, i32, String, String, i32, i32, i32, Option<String>, chrono::NaiveDate)>(
@@ -269,13 +252,9 @@ pub async fn list_stok_opname(
 
 pub async fn create_stok_opname(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Json(payload): Json<CreateStokOpnameRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
 
     let unit_valid: bool = sqlx::query_scalar(
@@ -406,12 +385,8 @@ pub async fn create_stok_opname(
 
 pub async fn list_transfer_stok(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
 
     let rows = sqlx::query_as::<_, (i32, Option<i32>, Option<i32>, i32, chrono::NaiveDateTime, Option<String>, Option<String>, Option<String>, Option<i32>, Option<String>, Option<chrono::NaiveDateTime>)>(
@@ -472,13 +447,9 @@ pub async fn list_transfer_stok(
 
 pub async fn create_transfer_stok(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Json(payload): Json<CreateTransferStokRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
     let user_id = claims.user_id;
 
@@ -627,14 +598,10 @@ pub async fn create_transfer_stok(
 
 pub async fn update_status_transfer(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Path(id): Path<i64>,
     Json(payload): Json<UpdateStatusTransferRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(
             SELECT 1 FROM stock_movements sm

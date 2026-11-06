@@ -6,16 +6,19 @@ class GudangProvider extends ChangeNotifier {
   // Data gudang yang disinkronkan langsung dari PostgreSQL backend
   List<TransferStokModel> _daftarTransfer = [];
   List<StokOpnameModel> _daftarOpname = [];
-  List<MutasiStokModel> _daftarMutasi = [];
+  final List<MutasiStokModel> _daftarMutasi = [];
   bool _isLoading = false;
+  String? _lastError;
 
   List<TransferStokModel> get daftarTransfer => _daftarTransfer;
   List<StokOpnameModel> get daftarOpname => _daftarOpname;
   List<MutasiStokModel> get daftarMutasi => _daftarMutasi;
   bool get isLoading => _isLoading;
+  String? get lastError => _lastError;
 
   Future<void> fetchTransferFromApi({int? unitId}) async {
     _isLoading = true;
+    _lastError = null;
     notifyListeners();
     try {
       final endpoint = (unitId != null && unitId > 0) ? '/gudang/transfer?unit_id=$unitId' : '/gudang/transfer';
@@ -41,14 +44,20 @@ class GudangProvider extends ChangeNotifier {
             status: stEnum,
           );
         }).toList();
+      } else if (res != null && res['status'] == 'error') {
+        _lastError = res['message'] as String?;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('GudangProvider.fetchTransferFromApi error: $e');
+      _lastError = 'Gagal memuat data transfer stok: $e';
+    }
     _isLoading = false;
     notifyListeners();
   }
 
   Future<void> fetchOpnameFromApi({int? unitId}) async {
     _isLoading = true;
+    _lastError = null;
     notifyListeners();
     try {
       final endpoint = (unitId != null && unitId > 0) ? '/gudang/opname?unit_id=$unitId' : '/gudang/opname';
@@ -67,13 +76,19 @@ class GudangProvider extends ChangeNotifier {
             tanggal: DateTime.tryParse(item['tanggal'] as String? ?? '') ?? DateTime.now(),
           );
         }).toList();
+      } else if (res != null && res['status'] == 'error') {
+        _lastError = res['message'] as String?;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('GudangProvider.fetchOpnameFromApi error: $e');
+      _lastError = 'Gagal memuat data stok opname: $e';
+    }
     _isLoading = false;
     notifyListeners();
   }
 
   Future<bool> kirimTransferStok(TransferStokModel transfer) async {
+    _lastError = null;
     try {
       final res = await ApiService.post('/gudang/transfer', {
         'unit_asal_id': transfer.unitAsalId,
@@ -85,14 +100,18 @@ class GudangProvider extends ChangeNotifier {
         await fetchTransferFromApi(unitId: transfer.unitAsalId);
         return true;
       }
-    } catch (_) {}
+      _lastError = res?['message'] as String? ?? 'Gagal mengirim transfer stok.';
+    } catch (e) {
+      debugPrint('GudangProvider.kirimTransferStok error: $e');
+      _lastError = 'Gagal mengirim transfer stok: $e';
+    }
 
-    _daftarTransfer.insert(0, transfer);
     notifyListeners();
-    return true;
+    return false;
   }
 
   Future<bool> konfirmasiPenerimaan(int id) async {
+    _lastError = null;
     try {
       final res = await ApiService.patch('/gudang/transfer/$id/status', {
         'status': 'diterima',
@@ -106,18 +125,18 @@ class GudangProvider extends ChangeNotifier {
         }
         return true;
       }
-    } catch (_) {}
-
-    final idx = _daftarTransfer.indexWhere((t) => t.id == id);
-    if (idx != -1) {
-      _daftarTransfer[idx].status = StatusTransfer.diterima;
-      _daftarTransfer[idx].waktuTerima = DateTime.now();
-      notifyListeners();
+      _lastError = res?['message'] as String? ?? 'Gagal mengonfirmasi penerimaan.';
+    } catch (e) {
+      debugPrint('GudangProvider.konfirmasiPenerimaan error: $e');
+      _lastError = 'Gagal mengonfirmasi penerimaan: $e';
     }
+
+    notifyListeners();
     return false;
   }
 
   Future<bool> tolakTransfer(int id) async {
+    _lastError = null;
     try {
       final res = await ApiService.patch('/gudang/transfer/$id/status', {
         'status': 'ditolak',
@@ -130,17 +149,18 @@ class GudangProvider extends ChangeNotifier {
         }
         return true;
       }
-    } catch (_) {}
-
-    final idx = _daftarTransfer.indexWhere((t) => t.id == id);
-    if (idx != -1) {
-      _daftarTransfer[idx].status = StatusTransfer.ditolak;
-      notifyListeners();
+      _lastError = res?['message'] as String? ?? 'Gagal menolak transfer.';
+    } catch (e) {
+      debugPrint('GudangProvider.tolakTransfer error: $e');
+      _lastError = 'Gagal menolak transfer: $e';
     }
+
+    notifyListeners();
     return false;
   }
 
   Future<bool> catatOpname(StokOpnameModel opname) async {
+    _lastError = null;
     try {
       final res = await ApiService.post('/gudang/opname', {
         'unit_id': opname.unitId,
@@ -152,11 +172,14 @@ class GudangProvider extends ChangeNotifier {
         await fetchOpnameFromApi(unitId: opname.unitId);
         return true;
       }
-    } catch (_) {}
+      _lastError = res?['message'] as String? ?? 'Gagal mencatat stok opname.';
+    } catch (e) {
+      debugPrint('GudangProvider.catatOpname error: $e');
+      _lastError = 'Gagal mencatat stok opname: $e';
+    }
 
-    _daftarOpname.insert(0, opname);
     notifyListeners();
-    return true;
+    return false;
   }
 
   void catatMutasi(MutasiStokModel mutasi) {

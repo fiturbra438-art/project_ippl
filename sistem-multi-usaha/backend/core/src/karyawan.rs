@@ -1,26 +1,25 @@
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::IntoResponse,
     Json,
 };
 use bcrypt::hash;
 use std::sync::Arc;
 
-use crate::auth::{require_claims, require_roles};
-use crate::models::{AuditLogModel, KaryawanAccount, PeranPengguna};
+use crate::auth::ensure_roles;
+use crate::models::{AuditLogModel, Claims, KaryawanAccount, PeranPengguna};
 use crate::schemas::{ApiResponse, CreateKaryawanRequest, UpdateKaryawanRequest};
 use crate::state::AppState;
 
 // 1. LIST KARYAWAN (Dari tabel PostgreSQL `users`)
 pub async fn list_karyawan(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
 ) -> impl IntoResponse {
-    let claims = match require_roles(&headers, &state.jwt_secret, &["owner", "manager"]) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
+    if let Err(err) = ensure_roles(&claims, &["owner", "manager"]) {
+        return err;
+    }
     let owner_id = claims.owner_id;
 
     let rows = sqlx::query_as::<_, (i32, Option<i32>, String, String, String, String, bool)>(
@@ -78,13 +77,12 @@ pub async fn list_karyawan(
 // 2. TAMBAH KARYAWAN (Tersimpan Permanen ke PostgreSQL `users` & `user_units`)
 pub async fn create_karyawan(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Json(payload): Json<CreateKaryawanRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_roles(&headers, &state.jwt_secret, &["owner", "manager"]) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
+    if let Err(err) = ensure_roles(&claims, &["owner", "manager"]) {
+        return err;
+    }
     let owner_id = claims.owner_id;
     let aktor_nama = claims.sub.clone();
 
@@ -112,7 +110,21 @@ pub async fn create_karyawan(
         )
             .into_response();
     }
-    let password_hash = hash(&payload.password, 12).unwrap_or_default();
+    let password_hash = match hash(&payload.password, 12) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!("Gagal mengenkripsi password karyawan: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<KaryawanAccount> {
+                    status: "error".to_string(),
+                    message: "Gagal mengenkripsi kata sandi karyawan.".to_string(),
+                    data: None,
+                }),
+            )
+                .into_response();
+        }
+    };
 
     for uid in &payload.unit_akses_ids {
         let valid: bool = sqlx::query_scalar(
@@ -221,14 +233,13 @@ pub async fn create_karyawan(
 // 3. UPDATE KARYAWAN
 pub async fn update_karyawan(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Path(id): Path<i64>,
     Json(payload): Json<UpdateKaryawanRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_roles(&headers, &state.jwt_secret, &["owner", "manager"]) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
+    if let Err(err) = ensure_roles(&claims, &["owner", "manager"]) {
+        return err;
+    }
     let owner_id = claims.owner_id;
 
     if claims.role == "manager" && (payload.peran.is_some() || payload.is_active.is_some()) {
@@ -367,13 +378,12 @@ pub async fn update_karyawan(
 // 4. HAPUS KARYAWAN
 pub async fn delete_karyawan(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    let claims = match require_roles(&headers, &state.jwt_secret, &["owner", "manager"]) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
+    if let Err(err) = ensure_roles(&claims, &["owner", "manager"]) {
+        return err;
+    }
     let owner_id = claims.owner_id;
 
     // Periksa target sebelum menghapus
@@ -457,12 +467,8 @@ pub async fn delete_karyawan(
 // 5. LIST AUDIT TRAIL / LOG AKTIVITAS (Dari tabel PostgreSQL `audit_logs`)
 pub async fn list_audit_logs(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
 
     let rows = sqlx::query_as::<

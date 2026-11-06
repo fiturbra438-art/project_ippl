@@ -18,7 +18,7 @@ RUN touch src/main.rs && cargo build --release --locked
 # Runtime image (super small & lightweight)
 FROM debian:bookworm-slim
 WORKDIR /app
-RUN apt-get update && apt-get install -y ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates libssl3 wget && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/src/app/target/release/core-backend /app/core-backend
 

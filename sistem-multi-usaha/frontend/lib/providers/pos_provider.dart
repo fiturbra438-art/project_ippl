@@ -54,9 +54,10 @@ class PosProvider extends ChangeNotifier {
   String _namaPelanggan = '';
   String _catatanTransaksi = '';
   bool _isOfflineMode = false;
-  int _offlineQueueCount = 0;
+  final List<Map<String, dynamic>> _offlinePayloads = [];
   int _activeUnitId = 0;
   String _activeUnitNama = '';
+  String? _lastError;
 
   // Tutup Shift Data (Awal 0)
   int? _activeShiftId;
@@ -79,7 +80,7 @@ class PosProvider extends ChangeNotifier {
   String get namaPelanggan => _namaPelanggan;
   String get catatanTransaksi => _catatanTransaksi;
   bool get isOfflineMode => _isOfflineMode;
-  int get offlineQueueCount => _offlineQueueCount;
+  int get offlineQueueCount => _offlinePayloads.length;
   int get activeUnitId => _activeUnitId;
   String get activeUnitNama => _activeUnitNama;
   int? get activeShiftId => _activeShiftId;
@@ -92,10 +93,12 @@ class PosProvider extends ChangeNotifier {
   bool get shiftIsOpen => _shiftIsOpen;
   List<Map<String, dynamic>> get activeOrders => _activeOrders;
   bool get isLoadingOrders => _isLoadingOrders;
+  String? get lastError => _lastError;
 
   // 1a. Load Pesanan Rental & Jasa yang sedang aktif
   Future<void> loadActiveOrders(int unitId) async {
     _isLoadingOrders = true;
+    _lastError = null;
     notifyListeners();
     try {
       final res = await ApiService.get('/pos/orders/active?unit_id=$unitId');
@@ -104,8 +107,13 @@ class PosProvider extends ChangeNotifier {
         _activeOrders = list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
       } else {
         _activeOrders = [];
+        if (res != null && res['status'] == 'error') {
+          _lastError = res['message'] as String?;
+        }
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('PosProvider.loadActiveOrders error: $e');
+      _lastError = 'Gagal memuat pesanan aktif: $e';
       _activeOrders = [];
     }
     _isLoadingOrders = false;
@@ -114,6 +122,7 @@ class PosProvider extends ChangeNotifier {
 
   // 1b. Pengembalian Rental (Return)
   Future<bool> returnRentalOrder(int orderId, {double penalty = 0.0, String? notes}) async {
+    _lastError = null;
     try {
       final res = await ApiService.post('/pos/rental/return', {
         'order_id': orderId,
@@ -126,12 +135,18 @@ class PosProvider extends ChangeNotifier {
         }
         return true;
       }
-    } catch (_) {}
+      _lastError = res?['message'] as String? ?? 'Gagal memproses pengembalian rental.';
+    } catch (e) {
+      debugPrint('PosProvider.returnRentalOrder error: $e');
+      _lastError = 'Gagal memproses pengembalian rental: $e';
+    }
+    notifyListeners();
     return false;
   }
 
   // 1c. Update Status Layanan Jasa (queued, in_progress, ready, completed)
   Future<bool> updateServiceOrderStatus(int orderId, String newStatus, {String? staff, String? notes}) async {
+    _lastError = null;
     try {
       final res = await ApiService.patch('/pos/service/status', {
         'order_id': orderId,
@@ -145,7 +160,12 @@ class PosProvider extends ChangeNotifier {
         }
         return true;
       }
-    } catch (_) {}
+      _lastError = res?['message'] as String? ?? 'Gagal memperbarui status layanan.';
+    } catch (e) {
+      debugPrint('PosProvider.updateServiceOrderStatus error: $e');
+      _lastError = 'Gagal memperbarui status layanan: $e';
+    }
+    notifyListeners();
     return false;
   }
 
@@ -166,6 +186,7 @@ class PosProvider extends ChangeNotifier {
 
   // 1. Ambil status shift dari PostgreSQL via API
   Future<void> initShiftStatus(int unitId) async {
+    _lastError = null;
     try {
       final res = await ApiService.get('/pos/shift/$unitId');
       if (res != null && res['status'] == 'success' && res['data'] != null) {
@@ -187,14 +208,16 @@ class PosProvider extends ChangeNotifier {
         _totalTransaksiShift = 0;
         _waktuBukaShift = '';
       }
-    } catch (_) {
-      // Fallback tetap menggunakan status memori jika API belum siap
+    } catch (e) {
+      debugPrint('PosProvider.initShiftStatus error: $e');
+      _lastError = 'Gagal memuat status shift: $e';
     }
     notifyListeners();
   }
 
   // 2. Buka shift kasir via API (sp_buka_shift_kasir)
   Future<bool> bukaShiftAPI(int unitId, double modal) async {
+    _lastError = null;
     try {
       final res = await ApiService.post('/pos/shift/buka', {
         'unit_id': unitId,
@@ -210,36 +233,49 @@ class PosProvider extends ChangeNotifier {
         notifyListeners();
         return true;
       }
-    } catch (_) {}
+      _lastError = res?['message'] as String? ?? 'Gagal membuka shift kasir.';
+    } catch (e) {
+      debugPrint('PosProvider.bukaShiftAPI error: $e');
+      _lastError = 'Gagal membuka shift kasir: $e';
+    }
+    notifyListeners();
     return false;
   }
 
   // 3. Tutup shift kasir via API (sp_tutup_shift_kasir)
   Future<bool> tutupShiftAPI(double uangFisikDiLaci) async {
-    if (_activeShiftId != null) {
-      try {
-        final res = await ApiService.post('/pos/shift/tutup', {
-          'shift_id': _activeShiftId,
-          'uang_fisik_laci': uangFisikDiLaci,
-        });
-        if (res != null && res['status'] == 'success') {
-          _shiftIsOpen = false;
-          _activeShiftId = null;
-          notifyListeners();
-          return true;
-        }
-      } catch (_) {}
+    _lastError = null;
+    if (_activeShiftId == null) {
+      _lastError = 'Tidak ada shift aktif untuk ditutup.';
+      notifyListeners();
+      return false;
     }
-    // Fallback lokal
-    _shiftIsOpen = false;
-    _activeShiftId = null;
+
+    try {
+      final res = await ApiService.post('/pos/shift/tutup', {
+        'shift_id': _activeShiftId,
+        'uang_fisik_laci': uangFisikDiLaci,
+      });
+      if (res != null && res['status'] == 'success') {
+        _shiftIsOpen = false;
+        _activeShiftId = null;
+        notifyListeners();
+        return true;
+      }
+      _lastError = res?['message'] as String? ?? 'Gagal menutup shift di server.';
+    } catch (e) {
+      debugPrint('PosProvider.tutupShiftAPI error: $e');
+      _lastError = 'Gagal menutup shift: $e';
+    }
+
     notifyListeners();
-    return true;
+    return false;
   }
 
   // 4. Checkout kasir via API (sp_proses_checkout_kasir & trigger update stok/omzet)
   Future<bool> checkoutAPI(int unitId, String metodeBayarStr, {String? keterangan}) async {
     if (_keranjang.isEmpty) return false;
+    _lastError = null;
 
     // Kirim struktur item lengkap (id produk opsional, nama custom, tipe, tarif sewa/jasa, durasi sewa, catatan, diskon per item)
     final itemsPayload = _keranjang.map((c) {
@@ -283,31 +319,57 @@ class PosProvider extends ChangeNotifier {
     final finalKeterangan = (keterangan ?? '') +
         (detailCatatan.isNotEmpty ? ' [${detailCatatan.toString().trim()}]' : '');
 
+    final payload = <String, dynamic>{
+      'unit_id': unitId,
+      'items': itemsPayload,
+      'metode_pembayaran': metodeBayarStr,
+      'keterangan': finalKeterangan.trim(),
+      'customer_name': _namaPelanggan.trim().isNotEmpty ? _namaPelanggan.trim() : null,
+      'notes': _catatanTransaksi.trim().isNotEmpty ? _catatanTransaksi.trim() : null,
+      'operation_mode': _modeOperasi.name,
+      'diskon_nominal': nominalDiskon,
+    };
+
+    if (_isOfflineMode) {
+      _offlinePayloads.add(payload);
+      checkoutBerhasil();
+      return true;
+    }
+
     try {
-      final res = await ApiService.post('/pos/checkout', {
-        'unit_id': unitId,
-        'items': itemsPayload,
-        'metode_pembayaran': metodeBayarStr,
-        'keterangan': finalKeterangan.trim(),
-        'customer_name': _namaPelanggan.trim().isNotEmpty ? _namaPelanggan.trim() : null,
-        'notes': _catatanTransaksi.trim().isNotEmpty ? _catatanTransaksi.trim() : null,
-        'operation_mode': _modeOperasi.name,
-        'diskon_nominal': nominalDiskon,
-      });
+      final res = await ApiService.post('/pos/checkout', payload);
 
       if (res != null && res['status'] == 'success') {
         checkoutBerhasil();
         return true;
       }
-    } catch (_) {}
-
-    // Jika offline mode aktif atau request fallback
-    if (_isOfflineMode) {
-      checkoutBerhasil();
-      return true;
+      _lastError = res?['message'] as String? ?? 'Gagal memproses checkout ke server.';
+    } catch (e) {
+      debugPrint('PosProvider.checkoutAPI error: $e');
+      _lastError = 'Gagal memproses checkout: $e';
     }
 
+    notifyListeners();
     return false;
+  }
+
+  Future<void> _syncOfflinePayloads() async {
+    if (_offlinePayloads.isEmpty) return;
+    final pending = List<Map<String, dynamic>>.from(_offlinePayloads);
+    _offlinePayloads.clear();
+
+    for (final payload in pending) {
+      try {
+        final res = await ApiService.post('/pos/checkout', payload);
+        if (res == null || res['status'] != 'success') {
+          _offlinePayloads.add(payload);
+        }
+      } catch (e) {
+        debugPrint('PosProvider._syncOfflinePayloads error: $e');
+        _offlinePayloads.add(payload);
+      }
+    }
+    notifyListeners();
   }
 
   void setActiveUnit(int unitId, String unitNama) {
@@ -326,9 +388,8 @@ class PosProvider extends ChangeNotifier {
 
   void toggleOfflineMode() {
     _isOfflineMode = !_isOfflineMode;
-    if (!_isOfflineMode && _offlineQueueCount > 0) {
-      // Sinkronisasi otomatis saat online kembali
-      _offlineQueueCount = 0;
+    if (!_isOfflineMode && _offlinePayloads.isNotEmpty) {
+      _syncOfflinePayloads();
     }
     notifyListeners();
   }
@@ -444,9 +505,6 @@ class PosProvider extends ChangeNotifier {
   }
 
   void checkoutBerhasil() {
-    if (_isOfflineMode) {
-      _offlineQueueCount++;
-    }
     if (_metodeBayar == MetodeBayar.tunai) {
       _totalPenjualanTunai += grandTotal;
     } else {

@@ -5,12 +5,16 @@ import '../services/api_service.dart';
 class UsahaProvider extends ChangeNotifier {
   // Data unit usaha yang disinkronkan langsung dengan PostgreSQL
   List<UsahaModel> _daftarUsaha = [];
+  String? _lastError;
+
+  String? get lastError => _lastError;
 
   UsahaProvider() {
     fetchUsahaFromApi();
   }
 
   Future<void> fetchUsahaFromApi() async {
+    _lastError = null;
     try {
       final res = await ApiService.get('/usaha');
       if (res != null && res['status'] == 'success' && res['data'] != null) {
@@ -30,8 +34,15 @@ class UsahaProvider extends ChangeNotifier {
           );
         }).toList();
         notifyListeners();
+      } else if (res != null && res['status'] == 'error') {
+        _lastError = res['message'] as String?;
+        notifyListeners();
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('UsahaProvider.fetchUsahaFromApi error: $e');
+      _lastError = 'Gagal memuat unit usaha: $e';
+      notifyListeners();
+    }
   }
 
   String _searchQuery = '';
@@ -73,9 +84,7 @@ class UsahaProvider extends ChangeNotifier {
   }
 
   Future<void> tambahUsaha(UsahaModel usaha) async {
-    _daftarUsaha.add(usaha);
-    notifyListeners();
-
+    _lastError = null;
     try {
       final res = await ApiService.post('/usaha', {
         'nama': usaha.nama,
@@ -84,42 +93,67 @@ class UsahaProvider extends ChangeNotifier {
         'kategori_portofolio': usaha.kategoriPortofolio,
         'has_pos': usaha.hasPos,
       });
-      if (res != null && res['data'] != null) {
+      if (res != null && res['status'] == 'success' && res['data'] != null) {
         await fetchUsahaFromApi();
+      } else {
+        _lastError = res?['message'] as String? ?? 'Gagal menambah unit usaha.';
+        notifyListeners();
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('UsahaProvider.tambahUsaha error: $e');
+      _lastError = 'Gagal menambah unit usaha: $e';
+      notifyListeners();
+    }
   }
 
   Future<void> hapusUsaha(int id) async {
-    _daftarUsaha.removeWhere((item) => item.id == id);
-    notifyListeners();
-
+    _lastError = null;
     try {
-      await ApiService.delete('/usaha/$id');
-    } catch (_) {}
+      final ok = await ApiService.delete('/usaha/$id');
+      if (ok) {
+        _daftarUsaha.removeWhere((item) => item.id == id);
+        notifyListeners();
+      } else {
+        _lastError = 'Gagal menghapus unit usaha di server.';
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('UsahaProvider.hapusUsaha error: $e');
+      _lastError = 'Gagal menghapus unit usaha: $e';
+      notifyListeners();
+    }
   }
 
   Future<void> toggleHasPos(int id) async {
+    _lastError = null;
     final idx = _daftarUsaha.indexWhere((item) => item.id == id);
     if (idx != -1) {
-      final u = _daftarUsaha[idx];
-      _daftarUsaha[idx] = UsahaModel(
-        id: u.id,
-        nama: u.nama,
-        jenisUsaha: u.jenisUsaha,
-        lokasi: u.lokasi,
-        kategoriPortofolio: u.kategoriPortofolio,
-        pendapatanBulanIni: u.pendapatanBulanIni,
-        pengeluaranBulanIni: u.pengeluaranBulanIni,
-        pertumbuhanPersen: u.pertumbuhanPersen,
-        status: u.status,
-        hasPos: !u.hasPos,
-      );
-      notifyListeners();
-
       try {
-        await ApiService.patch('/usaha/$id/toggle-pos');
-      } catch (_) {}
+        final res = await ApiService.patch('/usaha/$id/toggle-pos');
+        if (res != null && res['status'] == 'success') {
+          final u = _daftarUsaha[idx];
+          _daftarUsaha[idx] = UsahaModel(
+            id: u.id,
+            nama: u.nama,
+            jenisUsaha: u.jenisUsaha,
+            lokasi: u.lokasi,
+            kategoriPortofolio: u.kategoriPortofolio,
+            pendapatanBulanIni: u.pendapatanBulanIni,
+            pengeluaranBulanIni: u.pengeluaranBulanIni,
+            pertumbuhanPersen: u.pertumbuhanPersen,
+            status: u.status,
+            hasPos: !u.hasPos,
+          );
+          notifyListeners();
+        } else {
+          _lastError = res?['message'] as String? ?? 'Gagal mengubah status POS.';
+          notifyListeners();
+        }
+      } catch (e) {
+        debugPrint('UsahaProvider.toggleHasPos error: $e');
+        _lastError = 'Gagal mengubah status POS: $e';
+        notifyListeners();
+      }
     }
   }
 }

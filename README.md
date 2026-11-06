@@ -58,6 +58,35 @@ Pastikan tools berikut sudah terinstal di sistem Anda:
 
 ## 🚀 Panduan Instalasi & Menjalankan
 
+### Cara Cepat (Rekomendasi): Menggunakan Docker Compose
+
+1. Siapkan berkas `.env` di root direktori dengan menyalin template:
+   ```bash
+   cp .env.example .env
+   ```
+2. Sesuaikan konfigurasi secret pada `.env` (generate `JWT_SECRET` yang kuat dan password DB baru):
+   ```bash
+   # Generate string acak kuat (minimal 32-48 karakter)
+   openssl rand -base64 48
+   ```
+3. Build web frontend jika ingin disajikan langsung oleh core backend:
+   ```bash
+   cd sistem-multi-usaha/frontend && flutter build web --release && cd ../..
+   ```
+4. Jalankan seluruh service (Database, Core Backend Rust, AI Backend FastAPI):
+   ```bash
+   docker compose up -d
+   ```
+5. Periksa status dan healthcheck kontainer:
+   ```bash
+   docker compose ps
+   ```
+   Aplikasi dapat diakses di `http://localhost:8000`.
+
+---
+
+### Cara Manual (Development Per-Service)
+
 ### 1. Persiapan Database PostgreSQL
 
 1. Buat database dan user di PostgreSQL:
@@ -87,13 +116,11 @@ Pastikan tools berikut sudah terinstal di sistem Anda:
    cd sistem-multi-usaha/backend/core
    ```
 
-2. Buat berkas konfigurasi `.env`:
-   ```env
-   DATABASE_URL=postgresql://usaha_user:password_rahasia_anda@localhost:5432/usaha_db
-   PORT=8000
-   JWT_SECRET=super_secret_jwt_key_12345
-   WEB_DIR=../../frontend/build/web
+2. Buat berkas konfigurasi `.env` dari template:
+   ```bash
+   cp .env.example .env
    ```
+   Pastikan mengatur `JWT_SECRET` dengan string acak aman (minimal 32 karakter, misalnya hasil dari `openssl rand -base64 32`).
 
 3. Jalankan server:
    ```bash

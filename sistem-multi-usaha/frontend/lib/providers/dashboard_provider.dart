@@ -7,10 +7,12 @@ class DashboardProvider extends ChangeNotifier {
   List<UsahaModel> _daftarUsaha = [];
   bool _isLoading = false;
   int _selectedNavIndex = 0;
+  String? _lastError;
 
   List<UsahaModel> get daftarUsaha => _daftarUsaha;
   bool get isLoading => _isLoading;
   int get selectedNavIndex => _selectedNavIndex;
+  String? get lastError => _lastError;
 
   DashboardProvider() {
     fetchDashboardSummary();
@@ -18,6 +20,7 @@ class DashboardProvider extends ChangeNotifier {
 
   Future<void> fetchDashboardSummary() async {
     _isLoading = true;
+    _lastError = null;
     notifyListeners();
     try {
       final res = await ApiService.get('/dashboard/summary');
@@ -38,8 +41,13 @@ class DashboardProvider extends ChangeNotifier {
             hasPos: true,
           );
         }).toList();
+      } else if (res != null && res['status'] == 'error') {
+        _lastError = res['message'] as String?;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('DashboardProvider.fetchDashboardSummary error: $e');
+      _lastError = 'Gagal memuat ringkasan dashboard: $e';
+    }
     _isLoading = false;
     notifyListeners();
   }

@@ -11,7 +11,16 @@ __pycache__/
 
 # Environment files
 .env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
 *.env.local
+
+# Logs
+*.log
+**/*.log
 
 # Archives & Temporary files
 *.zip

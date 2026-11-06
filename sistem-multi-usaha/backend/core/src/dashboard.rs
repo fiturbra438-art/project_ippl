@@ -1,6 +1,6 @@
 use axum::{
     extract::{Query, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::IntoResponse,
     Json,
 };
@@ -8,8 +8,7 @@ use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::auth::require_claims;
-use crate::models::PaketLangganan;
+use crate::models::{Claims, PaketLangganan};
 use crate::schemas::ApiResponse;
 use crate::state::AppState;
 
@@ -61,12 +60,8 @@ pub struct LaporanKeuanganResponse {
 // 1. RINGKASAN DASHBOARD OWNER KONSOLIDASI (Strict Auth & Real-Time dari PostgreSQL)
 pub async fn get_dashboard_summary(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
     let is_owner_or_auditor = claims.role == "owner" || claims.role == "auditor";
 
@@ -221,13 +216,9 @@ pub async fn get_dashboard_summary(
 // 2. LAPORAN KEUANGAN & ARUS KAS (Strict Auth dari PostgreSQL)
 pub async fn get_laporan_keuangan(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Query(query): Query<LaporanQuery>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
 
     let rows = if let Some(uid) = query.unit_id {

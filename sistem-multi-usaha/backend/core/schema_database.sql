@@ -1,7 +1,198 @@
 -- ============================================================================
--- SQL DDL: VIEW, FUNCTION, TRIGGER & STORED PROCEDURE
+-- SQL DDL: TABEL UTAMA, VIEW, FUNCTION, TRIGGER & STORED PROCEDURE
 -- Pola Desain: Prosedur Utama memanggil View, Function, dan Trigger otomatis
 -- ============================================================================
+
+-- ----------------------------------------------------------------------------
+-- 0. TABEL UTAMA (CORE TABLES)
+-- ----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    owner_id INT REFERENCES users(id) ON DELETE CASCADE,
+    nama VARCHAR(100) NOT NULL,
+    email VARCHAR(150) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(30) NOT NULL,
+    aktif BOOLEAN NOT NULL DEFAULT true,
+    nama_perusahaan VARCHAR(150),
+    tier VARCHAR(30),
+    kuota_unit_usaha INT,
+    sisa_kuota_ai INT,
+    is_2fa_active BOOLEAN DEFAULT true,
+    secret_2fa VARCHAR(255),
+    otp_code VARCHAR(10),
+    otp_expires_at TIMESTAMP,
+    otp_attempts INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS business_units (
+    id SERIAL PRIMARY KEY,
+    owner_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    nama VARCHAR(100) NOT NULL,
+    jenis_usaha VARCHAR(50) NOT NULL,
+    lokasi VARCHAR(200),
+    kategori_portofolio VARCHAR(30) DEFAULT 'Star',
+    status BOOLEAN NOT NULL DEFAULT true,
+    has_pos BOOLEAN NOT NULL DEFAULT true,
+    pendapatan_bulan_ini NUMERIC(14,2) NOT NULL DEFAULT 0,
+    pengeluaran_bulan_ini NUMERIC(14,2) NOT NULL DEFAULT 0,
+    pertumbuhan_persen NUMERIC(8,2) NOT NULL DEFAULT 0,
+    periode_omzet VARCHAR(7) NOT NULL DEFAULT to_char(CURRENT_DATE, 'YYYY-MM'),
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ix_business_units_owner_id ON business_units(owner_id);
+
+CREATE TABLE IF NOT EXISTS user_units (
+    user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    unit_id INT NOT NULL REFERENCES business_units(id) ON DELETE CASCADE,
+    PRIMARY KEY (user_id, unit_id)
+);
+
+CREATE TABLE IF NOT EXISTS products (
+    id SERIAL PRIMARY KEY,
+    owner_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    sku VARCHAR(50) NOT NULL,
+    nama VARCHAR(150) NOT NULL,
+    kategori VARCHAR(80),
+    harga_beli NUMERIC(14,2) NOT NULL,
+    harga_jual NUMERIC(14,2) NOT NULL,
+    satuan VARCHAR(20) NOT NULL DEFAULT 'pcs',
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    CONSTRAINT uq_product_owner_sku UNIQUE (owner_id, sku)
+);
+
+CREATE INDEX IF NOT EXISTS ix_products_owner_id ON products(owner_id);
+
+CREATE TABLE IF NOT EXISTS inventories (
+    id SERIAL PRIMARY KEY,
+    unit_id INT NOT NULL REFERENCES business_units(id) ON DELETE CASCADE,
+    product_id INT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    qty INT NOT NULL DEFAULT 0,
+    min_stock INT NOT NULL DEFAULT 5,
+    lokasi_rak VARCHAR(50),
+    created_at TIMESTAMP NOT NULL DEFAULT now(),
+    CONSTRAINT uq_inventory_unit_product UNIQUE (unit_id, product_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_inventories_unit_id ON inventories(unit_id);
+CREATE INDEX IF NOT EXISTS ix_inventories_product_id ON inventories(product_id);
+
+CREATE TABLE IF NOT EXISTS transactions (
+    id SERIAL PRIMARY KEY,
+    unit_id INT NOT NULL REFERENCES business_units(id) ON DELETE CASCADE,
+    kasir_id INT REFERENCES users(id) ON DELETE SET NULL,
+    tanggal TIMESTAMP NOT NULL DEFAULT now(),
+    total NUMERIC(14,2) NOT NULL,
+    metode_bayar VARCHAR(30) NOT NULL,
+    status VARCHAR(30) NOT NULL DEFAULT 'selesai',
+    customer_name VARCHAR(150),
+    notes TEXT,
+    operation_mode VARCHAR(30) DEFAULT 'fleksibel',
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ix_transactions_unit_tanggal ON transactions(unit_id, tanggal);
+
+CREATE TABLE IF NOT EXISTS transaction_items (
+    id SERIAL PRIMARY KEY,
+    trx_id INT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+    product_id INT REFERENCES products(id) ON DELETE SET NULL,
+    item_name VARCHAR(150),
+    item_type VARCHAR(30) DEFAULT 'barang',
+    qty INT NOT NULL DEFAULT 1,
+    harga_satuan NUMERIC(14,2) NOT NULL,
+    diskon NUMERIC(14,2) NOT NULL DEFAULT 0,
+    subtotal NUMERIC(14,2) NOT NULL,
+    rental_duration INT DEFAULT 1,
+    duration_unit VARCHAR(20) DEFAULT 'jam',
+    notes TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ix_transaction_items_trx_id ON transaction_items(trx_id);
+
+CREATE TABLE IF NOT EXISTS cash_flows (
+    id SERIAL PRIMARY KEY,
+    unit_id INT NOT NULL REFERENCES business_units(id) ON DELETE CASCADE,
+    tanggal DATE NOT NULL DEFAULT CURRENT_DATE,
+    jenis VARCHAR(30) NOT NULL,
+    kategori VARCHAR(80) NOT NULL,
+    jumlah NUMERIC(14,2) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ix_cash_flows_unit_tanggal ON cash_flows(unit_id, tanggal);
+
+CREATE TABLE IF NOT EXISTS stock_movements (
+    id SERIAL PRIMARY KEY,
+    inventory_id INT NOT NULL REFERENCES inventories(id) ON DELETE CASCADE,
+    tipe VARCHAR(30) NOT NULL,
+    qty INT NOT NULL,
+    tanggal TIMESTAMP NOT NULL DEFAULT now(),
+    unit_asal_id INT REFERENCES business_units(id) ON DELETE SET NULL,
+    unit_tujuan_id INT REFERENCES business_units(id) ON DELETE SET NULL,
+    dicatat_oleh INT REFERENCES users(id) ON DELETE SET NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'diterima',
+    waktu_terima TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS stock_requests (
+    id SERIAL PRIMARY KEY,
+    owner_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    unit_id INT NOT NULL REFERENCES business_units(id) ON DELETE CASCADE,
+    nama_unit VARCHAR(100) NOT NULL,
+    pemohon VARCHAR(150) NOT NULL,
+    nama_produk VARCHAR(150) NOT NULL,
+    jumlah_diminta INT NOT NULL CHECK (jumlah_diminta > 0),
+    alasan TEXT,
+    waktu_pengajuan TIMESTAMP NOT NULL DEFAULT now(),
+    status VARCHAR(30) NOT NULL DEFAULT 'pending'
+);
+
+CREATE TABLE IF NOT EXISTS stock_opnames (
+    id SERIAL PRIMARY KEY,
+    owner_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    unit_id INT NOT NULL REFERENCES business_units(id) ON DELETE CASCADE,
+    nama_unit VARCHAR(100) NOT NULL,
+    nama_produk VARCHAR(150) NOT NULL,
+    stok_sistem INT NOT NULL,
+    stok_fisik INT NOT NULL,
+    selisih INT NOT NULL,
+    alasan TEXT,
+    tanggal DATE NOT NULL DEFAULT CURRENT_DATE
+);
+
+CREATE TABLE IF NOT EXISTS cashier_shifts (
+    id SERIAL PRIMARY KEY,
+    unit_id INT NOT NULL REFERENCES business_units(id) ON DELETE CASCADE,
+    kasir_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    nama_kasir VARCHAR(150) NOT NULL,
+    modal_awal NUMERIC(14,2) NOT NULL,
+    total_penjualan_tunai NUMERIC(14,2) NOT NULL DEFAULT 0,
+    total_penjualan_non_tunai NUMERIC(14,2) NOT NULL DEFAULT 0,
+    total_transaksi INT NOT NULL DEFAULT 0,
+    waktu_buka TIMESTAMP NOT NULL DEFAULT now(),
+    waktu_tutup TIMESTAMP,
+    status VARCHAR(20) NOT NULL DEFAULT 'open'
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id SERIAL PRIMARY KEY,
+    owner_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    aktor VARCHAR(150) NOT NULL,
+    role VARCHAR(30) NOT NULL,
+    aksi VARCHAR(100) NOT NULL,
+    modul VARCHAR(100) NOT NULL,
+    target VARCHAR(150) NOT NULL,
+    detail TEXT NOT NULL,
+    waktu TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ix_audit_logs_owner_waktu ON audit_logs(owner_id, waktu);
 
 -- ----------------------------------------------------------------------------
 -- 1. VIEW (Ringkasan Konsolidasi & Monitoring Keuangan)
@@ -144,13 +335,25 @@ AFTER INSERT ON transaction_items
 FOR EACH ROW
 EXECUTE FUNCTION trg_fn_kurangi_stok_inventaris();
 
--- Trigger Function B: Otomatis Update Omzet Unit Usaha saat Transaksi Berhasil
+-- Trigger Function B: Otomatis Update Omzet Unit Usaha saat Transaksi Berhasil (dengan Reset Periode Bulanan)
 CREATE OR REPLACE FUNCTION trg_fn_update_omzet_unit() 
 RETURNS TRIGGER AS $$
+DECLARE
+    v_periode_trx VARCHAR(7);
 BEGIN
     IF NEW.status = 'selesai' THEN
+        v_periode_trx := to_char(COALESCE(NEW.tanggal, now()), 'YYYY-MM');
         UPDATE business_units 
-        SET pendapatan_bulan_ini = COALESCE(pendapatan_bulan_ini, 0) + NEW.total
+        SET 
+            pendapatan_bulan_ini = CASE 
+                WHEN COALESCE(periode_omzet, '') = v_periode_trx THEN COALESCE(pendapatan_bulan_ini, 0) + NEW.total
+                ELSE NEW.total
+            END,
+            pengeluaran_bulan_ini = CASE 
+                WHEN COALESCE(periode_omzet, '') = v_periode_trx THEN COALESCE(pengeluaran_bulan_ini, 0)
+                ELSE 0
+            END,
+            periode_omzet = v_periode_trx
         WHERE id = NEW.unit_id;
     END IF;
     RETURN NEW;
@@ -518,17 +721,17 @@ BEGIN
 
         -- 1. Cabang Minimart / Toko Retail
         INSERT INTO business_units (owner_id, nama, jenis_usaha, lokasi, kategori_portofolio, status, has_pos, pendapatan_bulan_ini, pengeluaran_bulan_ini, pertumbuhan_persen)
-        VALUES (v_owner_id, 'Minimart Cabang Merdeka', 'Retail & Kelontong', 'Jl. Merdeka No. 10', 'star', true, true, 4500000.00, 1500000.00, 12.5)
+        VALUES (v_owner_id, 'Minimart Cabang Merdeka', 'Retail & Kelontong', 'Jl. Merdeka No. 10', 'Star', true, true, 4500000.00, 1500000.00, 12.5)
         RETURNING id INTO v_unit_toko;
 
         -- 2. Cabang Rental / Penyewaan
         INSERT INTO business_units (owner_id, nama, jenis_usaha, lokasi, kategori_portofolio, status, has_pos, pendapatan_bulan_ini, pengeluaran_bulan_ini, pertumbuhan_persen)
-        VALUES (v_owner_id, 'Multi Rental Studio & Game', 'Rental & Penyewaan', 'Jl. Sudirman No. 45', 'cash_cow', true, true, 6200000.00, 1800000.00, 8.4)
+        VALUES (v_owner_id, 'Multi Rental Studio & Game', 'Rental & Penyewaan', 'Jl. Sudirman No. 45', 'Cash Cow', true, true, 6200000.00, 1800000.00, 8.4)
         RETURNING id INTO v_unit_rental;
 
         -- 3. Cabang Jasa & Servis
         INSERT INTO business_units (owner_id, nama, jenis_usaha, lokasi, kategori_portofolio, status, has_pos, pendapatan_bulan_ini, pengeluaran_bulan_ini, pertumbuhan_persen)
-        VALUES (v_owner_id, 'QuickFix Servis & Laundry', 'Jasa & Reparasi', 'Jl. Pemuda No. 8', 'question_mark', true, true, 3100000.00, 950000.00, 15.2)
+        VALUES (v_owner_id, 'QuickFix Servis & Laundry', 'Jasa & Reparasi', 'Jl. Pemuda No. 8', 'Question Mark', true, true, 3100000.00, 950000.00, 15.2)
         RETURNING id INTO v_unit_jasa;
 
         -- Produk Retail

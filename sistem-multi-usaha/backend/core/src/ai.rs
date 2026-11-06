@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::IntoResponse,
     Json,
 };
@@ -9,7 +9,7 @@ use rust_decimal::prelude::ToPrimitive;
 use serde::Serialize;
 use std::sync::Arc;
 
-use crate::auth::require_claims;
+use crate::models::Claims;
 use crate::schemas::{ApiResponse, ChatAiRequest, ChatAiResponse};
 use crate::state::AppState;
 
@@ -44,13 +44,9 @@ pub struct AnomaliItem {
 // 1. CHATBOT BI ASSISTANT (Terkoneksi Penuh ke PostgreSQL & Strict Auth)
 pub async fn chat_ai(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Json(payload): Json<ChatAiRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
 
     // 1. Cek & Potong Kuota AI di Database PostgreSQL
@@ -135,7 +131,11 @@ pub async fn chat_ai(
 
     let star_units: Vec<String> = unit_rows
         .iter()
-        .filter(|u| u.2.as_deref() == Some("Star"))
+        .filter(|u| {
+            u.2.as_deref()
+                .map(|s| s.trim().eq_ignore_ascii_case("star"))
+                .unwrap_or(false)
+        })
         .map(|u| u.0.clone())
         .collect();
 
@@ -234,13 +234,9 @@ pub async fn chat_ai(
 // 2. FORECASTING DEMAND PENJUALAN (Dihitung Dinamis dari Histori Transaksi Riil PostgreSQL)
 pub async fn get_forecast(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Path(unit_id): Path<i64>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
 
     // Verifikasi unit_id milik bisnis pengguna
@@ -322,12 +318,8 @@ pub async fn get_forecast(
 // 3. DETEKSI ANOMALI BISNIS (Membaca Langsung dari View PostgreSQL)
 pub async fn get_anomali(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
 
     let mut anomalis: Vec<AnomaliItem> = Vec::new();

@@ -20,26 +20,13 @@ pub enum PaketLangganan {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OwnerAccount {
-    pub id: i64,
-    pub nama: String,
-    pub email: String,
-    pub password_hash: String,
-    pub nama_bisnis_induk: String,
-    pub paket_langganan: PaketLangganan,
-    pub kuota_unit_usaha: i32,
-    pub sisa_kuota_ai: i32,
-    pub is_2fa_active: bool,
-    pub secret_2fa: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KaryawanAccount {
     pub id: i64,
     pub owner_id: i64, // Terikat pada owner bisnis mana
     pub nama: String,
     pub email: String,
     #[serde(skip_serializing)]
+    #[allow(dead_code)]
     pub password_hash: String,
     pub peran: PeranPengguna,     // manager, kasir, admin_gudang, auditor
     pub unit_akses_ids: Vec<i64>, // Unit mana saja yang boleh diakses karyawan ini

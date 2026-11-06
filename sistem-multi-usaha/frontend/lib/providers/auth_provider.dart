@@ -10,9 +10,10 @@ class AuthProvider extends ChangeNotifier {
   bool _isAwaiting2FA = false;
   String _tempEmail = '';
   String _tempPassword = '';
+  String? _lastError;
 
   // Daftar pengguna yang disinkronkan dengan backend
-  List<UserModel> _penggunaList = [];
+  final List<UserModel> _penggunaList = [];
 
   final List<AuditLogModel> _auditLogs = [];
 
@@ -20,6 +21,7 @@ class AuthProvider extends ChangeNotifier {
   bool get isAuthenticated => _currentUser != null;
   bool get isAwaiting2FA => _isAwaiting2FA;
   int? get selectedUnitId => _selectedUnitId;
+  String? get lastError => _lastError;
   List<UserModel> get penggunaList => _penggunaList;
   List<AuditLogModel> get auditLogs => _auditLogs;
 
@@ -40,6 +42,7 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<bool> initiateLogin(String email, String password) async {
+    _lastError = null;
     // 1. Coba login via backend Rust API
     try {
       final resOwner = await AuthService.loginOwner(email, password);
@@ -76,6 +79,8 @@ class AuthProvider extends ChangeNotifier {
         // Platform Guard: Pada Web, izinkan Owner, Manager, dan Admin Gudang
         if (kIsWeb && roleEnum != UserRole.manager && roleEnum != UserRole.owner && roleEnum != UserRole.adminGudang) {
           ApiService.authToken = null;
+          _lastError = 'Akses Web tidak diizinkan untuk peran ini.';
+          notifyListeners();
           return false;
         }
 
@@ -93,10 +98,18 @@ class AuthProvider extends ChangeNotifier {
         notifyListeners();
         return true;
       }
-    } catch (_) {
+
+      _lastError = (resKaryawan?['message'] as String?) ??
+          (resOwner?['message'] as String?) ??
+          'Email atau password tidak sesuai.';
+    } catch (e) {
+      debugPrint('AuthProvider.initiateLogin error: $e');
+      _lastError = 'Gagal memproses login: $e';
+      notifyListeners();
       return false;
     }
 
+    notifyListeners();
     return false;
   }
 
@@ -114,6 +127,7 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<bool> verify2FACode(String code) async {
+    _lastError = null;
     try {
       final res = await AuthService.verify2FA(_tempEmail, _tempPassword, code);
       if (res != null && res['status'] == 'success') {
@@ -131,8 +145,13 @@ class AuthProvider extends ChangeNotifier {
         notifyListeners();
         return true;
       }
-    } catch (_) {}
+      _lastError = res?['message'] as String? ?? 'Kode OTP tidak valid.';
+    } catch (e) {
+      debugPrint('AuthProvider.verify2FACode error: $e');
+      _lastError = 'Gagal memverifikasi 2FA: $e';
+    }
 
+    notifyListeners();
     return false;
   }
 
@@ -142,6 +161,7 @@ class AuthProvider extends ChangeNotifier {
     required String password,
     required String namaUsahaUtama,
   }) async {
+    _lastError = null;
     try {
       final res = await AuthService.registerOwner(
         nama: nama,
@@ -171,9 +191,14 @@ class AuthProvider extends ChangeNotifier {
           notifyListeners();
           return true;
         }
+        _lastError = res['message'] as String? ?? 'Gagal mendaftarkan akun Owner.';
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('AuthProvider.registerOwner error: $e');
+      _lastError = 'Gagal registrasi Owner: $e';
+    }
 
+    notifyListeners();
     return false;
   }
 
@@ -211,7 +236,11 @@ class AuthProvider extends ChangeNotifier {
 
       if (res != null) {
         if (res['status'] == 'success') {
-          final newId = (res['data']?['id'] as num?)?.toInt() ?? DateTime.now().millisecondsSinceEpoch;
+          final newId = (res['data']?['id'] as num?)?.toInt();
+          if (newId == null) {
+            debugPrint('AuthProvider.tambahKaryawanKeBackend: ID karyawan tidak dikembalikan oleh server.');
+            return 'Server tidak mengembalikan ID karyawan yang valid.';
+          }
           _penggunaList.add(UserModel(
             id: newId,
             nama: nama,
@@ -227,6 +256,7 @@ class AuthProvider extends ChangeNotifier {
         }
       }
     } catch (e) {
+      debugPrint('AuthProvider.tambahKaryawanKeBackend error: $e');
       return 'Terjadi kendala jaringan: $e';
     }
 
@@ -240,6 +270,7 @@ class AuthProvider extends ChangeNotifier {
     _currentUser = null;
     _isAwaiting2FA = false;
     _selectedUnitId = null;
+    _lastError = null;
     ApiService.authToken = null;
     notifyListeners();
   }
@@ -274,8 +305,13 @@ class AuthProvider extends ChangeNotifier {
   }
 
   void hapusPengguna(int id) {
-    final user = _penggunaList.firstWhere((u) => u.id == id, orElse: () => _penggunaList.first);
-    _penggunaList.removeWhere((u) => u.id == id);
+    final idx = _penggunaList.indexWhere((u) => u.id == id);
+    if (idx == -1) {
+      debugPrint('AuthProvider.hapusPengguna: pengguna dengan id $id tidak ditemukan.');
+      return;
+    }
+    final user = _penggunaList[idx];
+    _penggunaList.removeAt(idx);
     addAuditLog('HAPUS_PENGGUNA', 'PENGGUNA', user.email, 'Owner mencabut seluruh akses akun');
     notifyListeners();
   }

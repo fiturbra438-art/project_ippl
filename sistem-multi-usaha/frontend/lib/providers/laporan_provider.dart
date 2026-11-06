@@ -5,6 +5,7 @@ import '../services/api_service.dart';
 class LaporanProvider extends ChangeNotifier {
   String _periodeTerpilih = 'Bulan Ini';
   bool _isLoading = false;
+  String? _lastError;
 
   final List<String> _daftarPeriode = ['Bulan Ini', 'Kuartal Ini', 'Tahun Ini'];
 
@@ -21,9 +22,11 @@ class LaporanProvider extends ChangeNotifier {
   List<String> get daftarPeriode => _daftarPeriode;
   LaporanSummary get summary => _summary;
   bool get isLoading => _isLoading;
+  String? get lastError => _lastError;
 
   Future<void> fetchLaporanFromApi({int? unitId}) async {
     _isLoading = true;
+    _lastError = null;
     notifyListeners();
     try {
       final endpoint = (unitId != null && unitId > 0) ? '/laporan/keuangan?unit_id=$unitId' : '/laporan/keuangan';
@@ -56,8 +59,13 @@ class LaporanProvider extends ChangeNotifier {
           rincianPengeluaran: [],
           performaUnit: performa,
         );
+      } else if (res != null && res['status'] == 'error') {
+        _lastError = res['message'] as String?;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('LaporanProvider.fetchLaporanFromApi error: $e');
+      _lastError = 'Gagal memuat laporan keuangan: $e';
+    }
     _isLoading = false;
     notifyListeners();
   }

@@ -1,7 +1,8 @@
 use axum::{
-    extract::State,
-    http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    async_trait,
+    extract::{FromRequestParts, State},
+    http::{request::Parts, HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
 use bcrypt::{hash, verify};
@@ -9,7 +10,7 @@ use chrono::{Duration, Utc};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use std::sync::Arc;
 
-use crate::models::{Claims, OwnerAccount, PaketLangganan};
+use crate::models::{Claims, PaketLangganan};
 use crate::schemas::{
     ApiResponse, KaryawanAuthResponse, LoginKaryawanRequest, LoginOwnerRequest, OwnerAuthResponse,
     RegisterOwnerRequest, UpgradeTierRequest, Verify2FARequest,
@@ -102,15 +103,22 @@ pub fn require_claims(
     }
 }
 
+#[async_trait]
+impl FromRequestParts<Arc<AppState>> for Claims {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<AppState>,
+    ) -> Result<Self, Self::Rejection> {
+        require_claims(&parts.headers, &state.jwt_secret).map_err(|err| err.into_response())
+    }
+}
+
 /// Otorisasi terpusat untuk endpoint administratif.
-pub fn require_roles(
-    headers: &axum::http::HeaderMap,
-    secret: &str,
-    allowed: &[&str],
-) -> Result<Claims, axum::response::Response> {
-    let claims = require_claims(headers, secret).map_err(|err| err.into_response())?;
+pub fn ensure_roles(claims: &Claims, allowed: &[&str]) -> Result<(), Response> {
     if allowed.iter().any(|role| *role == claims.role) {
-        Ok(claims)
+        Ok(())
     } else {
         Err((
             StatusCode::FORBIDDEN,
@@ -122,6 +130,18 @@ pub fn require_roles(
         )
             .into_response())
     }
+}
+
+/// Otorisasi terpusat berbasis header (kompatibilitas).
+#[allow(dead_code)]
+pub fn require_roles(
+    headers: &axum::http::HeaderMap,
+    secret: &str,
+    allowed: &[&str],
+) -> Result<Claims, axum::response::Response> {
+    let claims = require_claims(headers, secret).map_err(|err| err.into_response())?;
+    ensure_roles(&claims, allowed)?;
+    Ok(claims)
 }
 
 // 1. REGISTER OWNER (Hanya Owner yang bisa register mandiri)
@@ -185,21 +205,6 @@ pub async fn register_owner(
             )
         }
     };
-
-    let new_owner = OwnerAccount {
-        id: new_id,
-        nama: payload.nama.clone(),
-        email: payload.email.to_lowercase(),
-        password_hash,
-        nama_bisnis_induk: payload.nama_bisnis_induk,
-        paket_langganan: PaketLangganan::Free, // Default paket gratis
-        kuota_unit_usaha: 2,                   // Free tier = 2 unit
-        sisa_kuota_ai: 20,                     // 20 kredit AI awal
-        is_2fa_active: true,
-        secret_2fa: None,
-    };
-
-    state.owners.write().await.push(new_owner);
 
     // Kirim kode OTP pendaftaran langsung ke email
     let email_owner = payload.email.clone();
@@ -578,14 +583,9 @@ pub async fn verify_owner_2fa(
 // 4. UPGRADE PAKET OWNER (Wajib Token Owner & Update Langsung ke PostgreSQL)
 pub async fn upgrade_owner_tier(
     State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
+    claims: Claims,
     Json(payload): Json<UpgradeTierRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
-
     if claims.role != "owner" {
         return (
             StatusCode::FORBIDDEN,
@@ -616,14 +616,6 @@ pub async fn upgrade_owner_tier(
     .bind(claims.owner_id as i32)
     .execute(&state.db)
     .await;
-
-    // Sinkronkan RAM cache jika ada
-    let mut owners = state.owners.write().await;
-    if let Some(owner) = owners.iter_mut().find(|o| o.id == claims.owner_id) {
-        owner.paket_langganan = payload.paket_baru.clone();
-        owner.kuota_unit_usaha = kuota_unit;
-        owner.sisa_kuota_ai = kuota_ai;
-    }
 
     (
         StatusCode::OK,
@@ -799,4 +791,46 @@ pub async fn login_karyawan(
             }),
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    #[test]
+    fn test_generate_and_extract_jwt_claims() {
+        let secret = "test_secret_key_for_unit_testing_1234567890";
+        let token = generate_token(
+            "owner@example.com",
+            10,
+            "owner",
+            10,
+            Some("pro".to_string()),
+            secret,
+        )
+        .expect("token harus berhasil dibuat");
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
+        );
+
+        let claims = require_claims(&headers, secret).expect("claims harus valid");
+        assert_eq!(claims.sub, "owner@example.com");
+        assert_eq!(claims.user_id, 10);
+        assert_eq!(claims.role, "owner");
+        assert_eq!(claims.owner_id, 10);
+        assert_eq!(claims.tier.as_deref(), Some("pro"));
+        assert!(ensure_roles(&claims, &["owner", "manager"]).is_ok());
+        assert!(ensure_roles(&claims, &["kasir"]).is_err());
+    }
+
+    #[test]
+    fn test_require_claims_rejects_missing_or_invalid_token() {
+        let secret = "test_secret_key_for_unit_testing_1234567890";
+        let headers = HeaderMap::new();
+        assert!(require_claims(&headers, secret).is_err());
+    }
 }

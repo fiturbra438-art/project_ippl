@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::IntoResponse,
     Json,
 };
@@ -8,9 +8,8 @@ use chrono::Local;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::auth::require_claims;
 use crate::models::{
-    JenisTransaksi, RentalServiceOrderModel, ShiftKasirModel, StatusShift, TransaksiModel,
+    Claims, JenisTransaksi, RentalServiceOrderModel, ShiftKasirModel, StatusShift, TransaksiModel,
 };
 use crate::schemas::{
     ApiResponse, BukaShiftRequest, CheckoutRequest, CreateTransaksiManualRequest,
@@ -27,15 +26,10 @@ pub struct TransaksiQuery {
 // 1. STATUS SHIFT KASIR AKTIF (Membaca langsung dari tabel PostgreSQL cashier_shifts)
 pub async fn get_shift_status(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Path(unit_id): Path<i64>,
 ) -> impl IntoResponse {
     use rust_decimal::prelude::ToPrimitive;
-
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
 
     // Pastikan unit usaha yang diminta memang milik tenant pengguna.
     let unit_valid: bool = sqlx::query_scalar(
@@ -119,13 +113,9 @@ pub async fn get_shift_status(
 // 2. BUKA SHIFT KASIR (Memanggil Stored Procedure: CALL sp_buka_shift_kasir)
 pub async fn buka_shift(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Json(payload): Json<BukaShiftRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     if !["owner", "manager", "kasir"].contains(&claims.role.as_str()) {
         return (
             StatusCode::FORBIDDEN,
@@ -243,13 +233,9 @@ pub async fn buka_shift(
 // 3. TUTUP SHIFT KASIR (Memanggil Stored Procedure: CALL sp_tutup_shift_kasir)
 pub async fn tutup_shift(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Json(payload): Json<TutupShiftRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let shift_valid: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM cashier_shifts s JOIN business_units u ON u.id = s.unit_id WHERE s.id = $1 AND u.owner_id = $2)"
     )
@@ -344,13 +330,9 @@ pub async fn tutup_shift(
 // Prosedur ini otomatis memicu Trigger pemotongan stok, trigger update omzet, validasi Function stok, dan pencatatan audit.
 pub async fn checkout_pos(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Json(payload): Json<CheckoutRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
     let user_id = claims.user_id;
     let _kasir_nama = claims.sub.clone();
@@ -614,14 +596,17 @@ pub async fn checkout_pos(
             let total_belanja = total_opt.and_then(|d| d.to_f64()).unwrap_or(0.0);
             let waktu_transaksi = Local::now().format("%Y-%m-%d %H:%M").to_string();
 
-            // Ambil nama unit usaha
-            let usahas = state.usahas.read().await;
-            let nama_unit = usahas
-                .iter()
-                .find(|u| u.id == payload.unit_id)
-                .map(|u| u.nama.clone())
-                .unwrap_or_else(|| "Unit Usaha".to_string());
-            drop(usahas);
+            // Ambil nama unit usaha dari PostgreSQL
+            let nama_unit: String = sqlx::query_scalar(
+                "SELECT nama FROM business_units WHERE id = $1 AND owner_id = $2",
+            )
+            .bind(payload.unit_id as i32)
+            .bind(owner_id as i32)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "Unit Usaha".to_string());
 
             let new_trx = TransaksiModel {
                 id: trx_id,
@@ -666,13 +651,9 @@ pub async fn checkout_pos(
 // 5. RIWAYAT TRANSAKSI (Membaca langsung dari PostgreSQL transactions & business_units)
 pub async fn list_transaksi(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Query(query): Query<TransaksiQuery>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
 
     // Ambil data transaksi langsung dari PostgreSQL
@@ -832,13 +813,9 @@ pub async fn list_transaksi(
 // 6. CATAT TRANSAKSI MANUAL (Pemasukan / Pengeluaran Umum)
 pub async fn create_transaksi_manual(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Json(payload): Json<CreateTransaksiManualRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
     let aktor_nama = claims.sub.clone();
     let aktor_role = claims.role.clone();
@@ -952,21 +929,29 @@ pub async fn create_transaksi_manual(
         }
     };
 
-    // Sinkronkan agregat keuangan unit usaha
-    let kolom = if jenis_str == "masuk" {
-        "pendapatan_bulan_ini"
-    } else {
-        "pengeluaran_bulan_ini"
-    };
-    let sync_sql = format!(
-        "UPDATE business_units SET {} = COALESCE({}, 0) + $1 WHERE id = $2",
-        kolom, kolom
-    );
-    let _ = sqlx::query(&sync_sql)
-        .bind(jumlah_dec)
-        .bind(payload.unit_id as i32)
-        .execute(&mut *tx)
-        .await;
+    // Sinkronkan agregat keuangan unit usaha dengan pengecekan periode bulan berjalan
+    let is_masuk = jenis_str == "masuk";
+    let _ = sqlx::query(
+        "UPDATE business_units
+         SET
+             pendapatan_bulan_ini = CASE
+                 WHEN COALESCE(periode_omzet, '') = to_char(CURRENT_DATE, 'YYYY-MM')
+                     THEN COALESCE(pendapatan_bulan_ini, 0) + CASE WHEN $1 THEN $2 ELSE 0 END
+                 ELSE CASE WHEN $1 THEN $2 ELSE 0 END
+             END,
+             pengeluaran_bulan_ini = CASE
+                 WHEN COALESCE(periode_omzet, '') = to_char(CURRENT_DATE, 'YYYY-MM')
+                     THEN COALESCE(pengeluaran_bulan_ini, 0) + CASE WHEN NOT $1 THEN $2 ELSE 0 END
+                 ELSE CASE WHEN NOT $1 THEN $2 ELSE 0 END
+             END,
+             periode_omzet = to_char(CURRENT_DATE, 'YYYY-MM')
+         WHERE id = $3",
+    )
+    .bind(is_masuk)
+    .bind(jumlah_dec)
+    .bind(payload.unit_id as i32)
+    .execute(&mut *tx)
+    .await;
 
     // Audit log permanen
     let _ = sqlx::query(
@@ -1032,13 +1017,9 @@ pub async fn create_transaksi_manual(
 // 7. DAFTAR PESANAN RENTAL & JASA AKTIF / BERJALAN
 pub async fn list_active_orders(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Query(query): Query<TransaksiQuery>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
 
     #[derive(sqlx::FromRow)]
@@ -1149,13 +1130,9 @@ pub async fn list_active_orders(
 // 8. PENGEMBALIAN BARANG SEWA (RETURN RENTAL)
 pub async fn return_rental(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Json(payload): Json<ReturnRentalRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
 
     // Ambil order beserta status, unit, produk, dan qty untuk restore stok
@@ -1364,13 +1341,9 @@ pub async fn return_rental(
 // 9. UPDATE STATUS JASA / LAYANAN / SERVIS (BERIKUT PENUGASAN PETUGAS/TEKNISI)
 pub async fn update_service_status(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Json(payload): Json<UpdateServiceStatusRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
 
     let valid_status = ["queued", "in_progress", "ready", "completed", "cancelled"];

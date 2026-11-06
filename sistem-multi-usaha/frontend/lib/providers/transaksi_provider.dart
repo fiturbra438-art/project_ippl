@@ -6,6 +6,7 @@ class TransaksiProvider extends ChangeNotifier {
   // Data transaksi yang disinkronkan langsung dari PostgreSQL backend
   List<TransaksiModel> _daftarTransaksi = [];
   bool _isLoading = false;
+  String? _lastError;
 
   String _filterJenis = 'Semua';
 
@@ -20,9 +21,11 @@ class TransaksiProvider extends ChangeNotifier {
 
   bool get isLoading => _isLoading;
   String get filterJenis => _filterJenis;
+  String? get lastError => _lastError;
 
   Future<void> fetchTransaksiFromApi({int? unitId}) async {
     _isLoading = true;
+    _lastError = null;
     notifyListeners();
     try {
       final endpoint = (unitId != null && unitId > 0) ? '/transaksi?unit_id=$unitId' : '/transaksi';
@@ -43,8 +46,13 @@ class TransaksiProvider extends ChangeNotifier {
             keterangan: item['keterangan'] as String? ?? '',
           );
         }).toList();
+      } else if (res != null && res['status'] == 'error') {
+        _lastError = res['message'] as String?;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('TransaksiProvider.fetchTransaksiFromApi error: $e');
+      _lastError = 'Gagal memuat transaksi: $e';
+    }
     _isLoading = false;
     notifyListeners();
   }

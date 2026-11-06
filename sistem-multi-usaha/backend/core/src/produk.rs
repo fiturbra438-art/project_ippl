@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::StatusCode,
     response::IntoResponse,
     Json,
 };
@@ -8,8 +8,7 @@ use rust_decimal::prelude::ToPrimitive;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::auth::require_claims;
-use crate::models::ProdukModel;
+use crate::models::{Claims, ProdukModel};
 use crate::schemas::{AdjustStokRequest, ApiResponse, CreateProdukRequest, UpdateProdukRequest};
 use crate::state::AppState;
 
@@ -21,13 +20,9 @@ pub struct ProdukQuery {
 // 1. LIST PRODUK (Membaca langsung dari tabel PostgreSQL products & inventories)
 pub async fn list_produk(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Query(query): Query<ProdukQuery>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
 
     let rows = if let Some(uid) = query.unit_id {
@@ -90,12 +85,8 @@ pub async fn list_produk(
 // 2. PRODUK STOK KRITIS (Membaca langsung dari VIEW view_produk_stok_kritis)
 pub async fn list_low_stock(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
 
     let rows = sqlx::query_as::<_, (i32, i32, String, String, rust_decimal::Decimal, rust_decimal::Decimal, i32, i32)>(
@@ -143,13 +134,9 @@ pub async fn list_low_stock(
 // 3. DETAIL PRODUK
 pub async fn get_produk_detail(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let row = sqlx::query_as::<_, (i32, i32, i32, String, String, rust_decimal::Decimal, rust_decimal::Decimal, i32, i32)>(
         "SELECT p.id, p.owner_id, COALESCE(i.unit_id, 1), p.nama, p.sku, p.harga_beli, p.harga_jual, COALESCE(i.qty, 0), COALESCE(i.min_stock, 5)
          FROM products p
@@ -196,13 +183,9 @@ pub async fn get_produk_detail(
 // 4. TAMBAH PRODUK (Tersimpan Permanen ke PostgreSQL products & inventories)
 pub async fn create_produk(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Json(payload): Json<CreateProdukRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let owner_id = claims.owner_id;
     let aktor_role = claims.role.as_str();
 
@@ -333,14 +316,10 @@ pub async fn create_produk(
 // 5. UPDATE PRODUK (PostgreSQL update)
 pub async fn update_produk(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Path(id): Path<i64>,
     Json(payload): Json<UpdateProdukRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     let aktor_role = claims.role.as_str();
 
     let product_valid: bool =
@@ -431,14 +410,10 @@ pub async fn update_produk(
 // 6. PENYESUAIAN STOK CEPAT
 pub async fn adjust_stok(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Path(id): Path<i64>,
     Json(payload): Json<AdjustStokRequest>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     if !["owner", "manager", "admin_gudang"].contains(&claims.role.as_str()) {
         return (
             StatusCode::FORBIDDEN,
@@ -487,13 +462,9 @@ pub async fn adjust_stok(
 // 7. HAPUS PRODUK
 pub async fn delete_produk(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
+    claims: Claims,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
-    let claims = match require_claims(&headers, &state.jwt_secret) {
-        Ok(c) => c,
-        Err(err) => return err.into_response(),
-    };
     if !["owner", "manager"].contains(&claims.role.as_str()) {
         return (
             StatusCode::FORBIDDEN,

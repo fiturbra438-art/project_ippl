@@ -57,7 +57,8 @@ class ChatAiProvider extends ChangeNotifier {
         // Fallback jika backend offline/tidak terjangkau
         reply = _localFallbackReply(text);
       }
-    } catch (_) {
+    } catch (e) {
+      debugPrint('ChatAiProvider.sendMessage error: $e');
       reply = _localFallbackReply(text);
     }
 

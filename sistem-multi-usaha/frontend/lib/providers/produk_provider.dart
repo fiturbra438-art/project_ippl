@@ -6,6 +6,7 @@ class ProdukProvider extends ChangeNotifier {
   // Data produk yang disinkronkan langsung dari PostgreSQL backend
   List<ProdukModel> _daftarProduk = [];
   bool _isLoading = false;
+  String? _lastError;
 
   int _selectedUnitFilter = 0; // 0 = Semua
   String _searchQuery = '';
@@ -21,9 +22,11 @@ class ProdukProvider extends ChangeNotifier {
 
   bool get isLoading => _isLoading;
   int get selectedUnitFilter => _selectedUnitFilter;
+  String? get lastError => _lastError;
 
   Future<void> fetchProdukFromApi({int? unitId}) async {
     _isLoading = true;
+    _lastError = null;
     notifyListeners();
     try {
       final endpoint = (unitId != null && unitId > 0) ? '/produk?unit_id=$unitId' : '/produk';
@@ -42,8 +45,13 @@ class ProdukProvider extends ChangeNotifier {
             minStok: (item['min_stok'] as num?)?.toInt() ?? 5,
           );
         }).toList();
+      } else if (res != null && res['status'] == 'error') {
+        _lastError = res['message'] as String?;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('ProdukProvider.fetchProdukFromApi error: $e');
+      _lastError = 'Gagal memuat produk: $e';
+    }
     _isLoading = false;
     notifyListeners();
   }
@@ -82,6 +90,7 @@ class ProdukProvider extends ChangeNotifier {
   }
 
   Future<bool> simpanProdukKeBackend(ProdukModel produk) async {
+    _lastError = null;
     try {
       final res = await ApiService.post('/produk', {
         'unit_id': produk.unitId,
@@ -111,11 +120,13 @@ class ProdukProvider extends ChangeNotifier {
         notifyListeners();
         return true;
       }
-    } catch (_) {}
+      _lastError = res?['message'] as String? ?? 'Gagal menyimpan produk ke server.';
+    } catch (e) {
+      debugPrint('ProdukProvider.simpanProdukKeBackend error: $e');
+      _lastError = 'Gagal menyimpan produk: $e';
+    }
 
-    // Fallback lokal
-    _daftarProduk.add(produk);
     notifyListeners();
-    return true;
+    return false;
   }
 }

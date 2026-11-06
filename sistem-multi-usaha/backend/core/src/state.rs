@@ -1,23 +1,7 @@
-use crate::models::{
-    AuditLogModel, KaryawanAccount, OwnerAccount, PaketLangganan, PermintaanStokModel, ProdukModel,
-    ShiftKasirModel, StokOpnameModel, TransaksiModel, TransferStokModel, UsahaModel,
-};
 use sqlx::PgPool;
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 pub struct AppState {
     pub db: PgPool,
-    pub owners: Arc<RwLock<Vec<OwnerAccount>>>,
-    pub karyawans: Arc<RwLock<Vec<KaryawanAccount>>>,
-    pub usahas: Arc<RwLock<Vec<UsahaModel>>>,
-    pub produks: Arc<RwLock<Vec<ProdukModel>>>,
-    pub transaksis: Arc<RwLock<Vec<TransaksiModel>>>,
-    pub shifts: Arc<RwLock<Vec<ShiftKasirModel>>>,
-    pub permintaan_stoks: Arc<RwLock<Vec<PermintaanStokModel>>>,
-    pub stok_opnames: Arc<RwLock<Vec<StokOpnameModel>>>,
-    pub transfer_stoks: Arc<RwLock<Vec<TransferStokModel>>>,
-    pub audit_logs: Arc<RwLock<Vec<AuditLogModel>>>,
     pub jwt_secret: String,
 }
 
@@ -108,7 +92,6 @@ impl AppState {
         let _ = sqlx::query("CREATE INDEX IF NOT EXISTS ix_rental_service_product_active ON rental_service_orders(product_id, status)")
             .execute(&pool)
             .await;
-        // Kolom tambahan untuk tabel yang mungkin sudah dibuat versi lama
         let _ = sqlx::query("ALTER TABLE rental_service_orders ADD COLUMN IF NOT EXISTS qty INT NOT NULL DEFAULT 1")
             .execute(&pool)
             .await;
@@ -121,126 +104,69 @@ impl AppState {
             .execute(&pool)
             .await;
 
-        // Baca seluruh data nyata yang tersimpan di PostgreSQL ke cache RAM.
-        #[derive(sqlx::FromRow)]
-        struct UserRow {
-            id: i32,
-            owner_id: Option<i32>,
-            nama: String,
-            email: String,
-            password_hash: String,
-            role: String,
-            aktif: bool,
-            nama_perusahaan: Option<String>,
-            tier: Option<String>,
-            kuota_unit_usaha: Option<i32>,
-            sisa_kuota_ai: Option<i32>,
-            is_2fa_active: Option<bool>,
-            secret_2fa: Option<String>,
-        }
-
-        let user_rows: Vec<UserRow> = sqlx::query_as("SELECT id, owner_id, nama, email, password_hash, role, aktif, nama_perusahaan, tier, kuota_unit_usaha, sisa_kuota_ai, is_2fa_active, secret_2fa FROM users")
-            .fetch_all(&pool)
-            .await
-            .unwrap_or_default();
-
-        let mut owners: Vec<OwnerAccount> = Vec::new();
-        let mut karyawans: Vec<KaryawanAccount> = Vec::new();
-
-        for u in user_rows {
-            if u.role == "owner" {
-                owners.push(OwnerAccount {
-                    id: u.id as i64,
-                    nama: u.nama,
-                    email: u.email,
-                    password_hash: u.password_hash,
-                    nama_bisnis_induk: u
-                        .nama_perusahaan
-                        .unwrap_or_else(|| "Grup Bisnis".to_string()),
-                    paket_langganan: match u.tier.as_deref() {
-                        Some("enterprise") => PaketLangganan::Enterprise,
-                        Some("pro") => PaketLangganan::Pro,
-                        _ => PaketLangganan::Free,
-                    },
-                    kuota_unit_usaha: u.kuota_unit_usaha.unwrap_or(5),
-                    sisa_kuota_ai: u.sisa_kuota_ai.unwrap_or(250),
-                    is_2fa_active: u.is_2fa_active.unwrap_or(true),
-                    secret_2fa: u.secret_2fa,
-                });
-            } else {
-                let peran = match u.role.as_str() {
-                    "manager" => crate::models::PeranPengguna::Manager,
-                    "kasir" => crate::models::PeranPengguna::Kasir,
-                    "admin_gudang" => crate::models::PeranPengguna::AdminGudang,
-                    _ => crate::models::PeranPengguna::Auditor,
-                };
-
-                // Ambil unit yang diakses karyawan
-                let unit_ids: Vec<i64> =
-                    sqlx::query_scalar("SELECT unit_id FROM user_units WHERE user_id = $1")
-                        .bind(u.id)
-                        .fetch_all(&pool)
-                        .await
-                        .unwrap_or_default();
-
-                let Some(k_owner_id) = u.owner_id.map(|oid| oid as i64) else {
-                    // Data legacy tanpa owner tidak boleh diberi tenant default.
-                    continue;
-                };
-
-                karyawans.push(KaryawanAccount {
-                    id: u.id as i64,
-                    owner_id: k_owner_id,
-                    nama: u.nama,
-                    email: u.email,
-                    password_hash: u.password_hash,
-                    peran,
-                    unit_akses_ids: unit_ids,
-                    is_active: u.aktif,
-                });
-            }
-        }
-
-        // 3. Baca data Unit Usaha dari PostgreSQL
-        let mut usahas: Vec<UsahaModel> = Vec::new();
-        let usaha_rows = sqlx::query_as::<_, (i32, i32, String, String, Option<String>, Option<String>, bool, Option<bool>)>(
-            "SELECT id, owner_id, nama, jenis_usaha, lokasi, kategori_portofolio, status, has_pos FROM business_units"
+        // 1f. Kolom periode_omzet dan sinkronisasi casing kategori_portofolio di business_units
+        let _ = sqlx::query("ALTER TABLE business_units ADD COLUMN IF NOT EXISTS periode_omzet VARCHAR(7) NOT NULL DEFAULT to_char(CURRENT_DATE, 'YYYY-MM')")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query(
+            "UPDATE business_units SET kategori_portofolio = CASE LOWER(kategori_portofolio)
+                WHEN 'star' THEN 'Star'
+                WHEN 'cash_cow' THEN 'Cash Cow'
+                WHEN 'cash cow' THEN 'Cash Cow'
+                WHEN 'question_mark' THEN 'Question Mark'
+                WHEN 'question mark' THEN 'Question Mark'
+                WHEN 'dog' THEN 'Dog'
+                ELSE COALESCE(kategori_portofolio, 'Star')
+            END"
         )
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_default();
+        .execute(&pool)
+        .await;
 
-        for u in usaha_rows {
-            usahas.push(UsahaModel {
-                id: u.0 as i64,
-                owner_id: u.1 as i64,
-                nama: u.2,
-                jenis_usaha: u.3,
-                lokasi: u.4.unwrap_or_default(),
-                kategori_portofolio: u.5.unwrap_or_else(|| "Star".to_string()),
-                pendapatan_bulan_ini: 0.0,
-                pengeluaran_bulan_ini: 0.0,
-                pertumbuhan_persen: 0.0,
-                status: u.6,
-                has_pos: u.7.unwrap_or(true),
-            });
-        }
+        // Reset omzet bulanan jika periode_omzet berbeda dengan bulan berjalan
+        let _ = sqlx::query(
+            "UPDATE business_units
+             SET pendapatan_bulan_ini = 0,
+                 pengeluaran_bulan_ini = 0,
+                 periode_omzet = to_char(CURRENT_DATE, 'YYYY-MM')
+             WHERE COALESCE(periode_omzet, '') <> to_char(CURRENT_DATE, 'YYYY-MM')"
+        )
+        .execute(&pool)
+        .await;
+
+        // Perbarui trigger fungsi omzet agar otomatis me-reset di pergantian bulan
+        let _ = sqlx::query(
+            "CREATE OR REPLACE FUNCTION trg_fn_update_omzet_unit() 
+            RETURNS TRIGGER AS $$
+            DECLARE
+                v_periode_trx VARCHAR(7);
+            BEGIN
+                IF NEW.status = 'selesai' THEN
+                    v_periode_trx := to_char(COALESCE(NEW.tanggal, now()), 'YYYY-MM');
+                    UPDATE business_units 
+                    SET 
+                        pendapatan_bulan_ini = CASE 
+                            WHEN COALESCE(periode_omzet, '') = v_periode_trx THEN COALESCE(pendapatan_bulan_ini, 0) + NEW.total
+                            ELSE NEW.total
+                        END,
+                        pengeluaran_bulan_ini = CASE 
+                            WHEN COALESCE(periode_omzet, '') = v_periode_trx THEN COALESCE(pengeluaran_bulan_ini, 0)
+                            ELSE 0
+                        END,
+                        periode_omzet = v_periode_trx
+                    WHERE id = NEW.unit_id;
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;"
+        )
+        .execute(&pool)
+        .await;
 
         let jwt_secret = std::env::var("JWT_SECRET")
             .expect("JWT_SECRET wajib diatur dan tidak boleh memakai secret default");
 
         Self {
             db: pool,
-            owners: Arc::new(RwLock::new(owners)),
-            karyawans: Arc::new(RwLock::new(karyawans)),
-            usahas: Arc::new(RwLock::new(usahas)),
-            produks: Arc::new(RwLock::new(Vec::new())),
-            transaksis: Arc::new(RwLock::new(Vec::new())),
-            shifts: Arc::new(RwLock::new(Vec::new())),
-            permintaan_stoks: Arc::new(RwLock::new(Vec::new())),
-            stok_opnames: Arc::new(RwLock::new(Vec::new())),
-            transfer_stoks: Arc::new(RwLock::new(Vec::new())),
-            audit_logs: Arc::new(RwLock::new(Vec::new())),
             jwt_secret,
         }
     }
