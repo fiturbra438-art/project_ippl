@@ -10,8 +10,23 @@ import 'usaha_screen.dart';
 import 'transaksi_screen.dart';
 import 'portofolio_screen.dart';
 
-class ForecastScreen extends StatelessWidget {
+class ForecastScreen extends StatefulWidget {
   const ForecastScreen({super.key});
+
+  @override
+  State<ForecastScreen> createState() => _ForecastScreenState();
+}
+
+class _ForecastScreenState extends State<ForecastScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        context.read<ForecastProvider>().load();
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -24,7 +39,8 @@ class ForecastScreen extends StatelessWidget {
               elevation: 0,
               title: const Text(
                 'Proyeksi Finansial AI',
-                style: TextStyle(color: AppTheme.primaryBlue, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                    color: AppTheme.primaryBlue, fontWeight: FontWeight.bold),
               ),
             )
           : null,
@@ -66,7 +82,10 @@ class ForecastScreen extends StatelessWidget {
       children: const [
         Text(
           'Forecasting & Estimasi Kas Masa Depan',
-          style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppTheme.textPrimary),
+          style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              color: AppTheme.textPrimary),
         ),
         SizedBox(height: 4),
         Text(
@@ -89,22 +108,38 @@ class ForecastScreen extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const Icon(Icons.storefront_rounded, color: AppTheme.primaryBlue, size: 20),
+          const Icon(Icons.storefront_rounded,
+              color: AppTheme.primaryBlue, size: 20),
           const SizedBox(width: 12),
-          const Text('Pilih Unit Usaha:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+          const Text('Pilih Unit Usaha:',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
           const SizedBox(width: 16),
-          DropdownButtonHideUnderline(
-            child: DropdownButton<int>(
-              value: provider.selectedUnitId,
-              items: const [
-                DropdownMenuItem(value: 1, child: Text('Kedai Kopi Bahagia (Star)')),
-                DropdownMenuItem(value: 2, child: Text('Laundry Bersih Kilat (Cash Cow)')),
-              ],
-              onChanged: (val) {
-                if (val != null) provider.selectUnit(val);
-              },
+          if (provider.units.isEmpty)
+            const Text(
+              'Belum ada unit usaha',
+              style: TextStyle(fontSize: 13, color: AppTheme.textMuted),
+            )
+          else
+            DropdownButtonHideUnderline(
+              child: DropdownButton<int>(
+                value: provider.units.any(
+                  (unit) => unit.id == provider.selectedUnitId,
+                )
+                    ? provider.selectedUnitId
+                    : provider.units.first.id,
+                items: provider.units
+                    .map(
+                      (unit) => DropdownMenuItem(
+                        value: unit.id,
+                        child: Text(unit.nama),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (val) {
+                  if (val != null) provider.selectUnit(val);
+                },
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -112,80 +147,120 @@ class ForecastScreen extends StatelessWidget {
 
   Widget _buildForecastCards(BuildContext context, bool isMobile) {
     final provider = context.watch<ForecastProvider>();
-    final currency = NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
+    final currency =
+        NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text(
           'Hasil Proyeksi Estimasi Pendapatan Bulanan',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
+          style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: AppTheme.textPrimary),
         ),
         const SizedBox(height: 12),
-        ...provider.currentForecast.map((point) {
-          final isAktual = point.aktual > 0;
-          return Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: AppTheme.surfaceWhite,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: AppTheme.cardBorder),
+        if (provider.isLoading)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Center(child: CircularProgressIndicator()),
+          )
+        else if (provider.lastError != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Text(
+              provider.lastError!,
+              style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626)),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 20,
-                      backgroundColor: isAktual ? AppTheme.lightBlueBg : AppTheme.lightGreenBg,
-                      child: Text(
-                        point.periode,
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: isAktual ? AppTheme.primaryBlue : AppTheme.accentGreen,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          isAktual ? 'Realisasi Aktual' : 'Proyeksi Model AI',
+          )
+        else if (provider.currentForecast.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Text(
+              'Belum ada data transaksi untuk unit ini. Catat penjualan terlebih dahulu.',
+              style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
+            ),
+          )
+        else
+          ...provider.currentForecast.map((point) {
+            final isAktual = point.aktual > 0;
+            return Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: AppTheme.surfaceWhite,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: AppTheme.cardBorder),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 20,
+                        backgroundColor: isAktual
+                            ? AppTheme.lightBlueBg
+                            : AppTheme.lightGreenBg,
+                        child: Text(
+                          point.periode,
                           style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: isAktual
+                                ? AppTheme.primaryBlue
+                                : AppTheme.accentGreen,
                             fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: isAktual ? AppTheme.textSecondary : AppTheme.accentGreen,
                           ),
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          currency.format(point.prediksi),
-                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-                if (!isAktual)
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      const Text('Rentang Kepercayaan (95%)', style: TextStyle(fontSize: 11, color: AppTheme.textMuted)),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${currency.format(point.batasBawah)} - ${currency.format(point.batasAtas)}',
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppTheme.textSecondary),
+                      ),
+                      const SizedBox(width: 16),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            isAktual ? 'Realisasi Aktual' : 'Proyeksi Model AI',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: isAktual
+                                  ? AppTheme.textSecondary
+                                  : AppTheme.accentGreen,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            currency.format(point.prediksi),
+                            style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: AppTheme.textPrimary),
+                          ),
+                        ],
                       ),
                     ],
                   ),
-              ],
-            ),
-          );
-        }),
+                  if (!isAktual)
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        const Text('Rentang Kepercayaan (95%)',
+                            style: TextStyle(
+                                fontSize: 11, color: AppTheme.textMuted)),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${currency.format(point.batasBawah)} - ${currency.format(point.batasAtas)}',
+                          style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: AppTheme.textSecondary),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            );
+          }),
       ],
     );
   }
@@ -201,7 +276,8 @@ class ForecastScreen extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.tips_and_updates_rounded, color: AppTheme.accentGreen, size: 26),
+          const Icon(Icons.tips_and_updates_rounded,
+              color: AppTheme.accentGreen, size: 26),
           const SizedBox(width: 16),
           Expanded(
             child: Column(
@@ -209,12 +285,16 @@ class ForecastScreen extends StatelessWidget {
               children: const [
                 Text(
                   'Analisis AI & Pola Musiman',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.textPrimary),
                 ),
                 SizedBox(height: 4),
                 Text(
                   'Berdasarkan pola historis, bulan Desember dan Januari akan mengalami kenaikan omzet rata-rata 15-25% karena musim liburan. Disarankan menyiapkan tambahan modal stok minimal 2 minggu sebelum periode libur.',
-                  style: TextStyle(fontSize: 13, color: Color(0xFF065F46), height: 1.4),
+                  style: TextStyle(
+                      fontSize: 13, color: Color(0xFF065F46), height: 1.4),
                 ),
               ],
             ),
@@ -235,9 +315,14 @@ class ForecastScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                Text('MultiUsaha', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                Text('MultiUsaha',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold)),
                 SizedBox(height: 4),
-                Text('Sistem Manajemen Portofolio', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                Text('Sistem Manajemen Portofolio',
+                    style: TextStyle(color: Colors.white70, fontSize: 13)),
               ],
             ),
           ),
@@ -246,7 +331,8 @@ class ForecastScreen extends StatelessWidget {
             title: const Text('Dashboard'),
             onTap: () {
               Navigator.pop(context);
-              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
+              Navigator.pushReplacement(context,
+                  MaterialPageRoute(builder: (_) => const DashboardScreen()));
             },
           ),
           ListTile(
@@ -254,7 +340,8 @@ class ForecastScreen extends StatelessWidget {
             title: const Text('Unit Usaha'),
             onTap: () {
               Navigator.pop(context);
-              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const UsahaScreen()));
+              Navigator.pushReplacement(context,
+                  MaterialPageRoute(builder: (_) => const UsahaScreen()));
             },
           ),
           ListTile(
@@ -262,7 +349,8 @@ class ForecastScreen extends StatelessWidget {
             title: const Text('Transaksi'),
             onTap: () {
               Navigator.pop(context);
-              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const TransaksiScreen()));
+              Navigator.pushReplacement(context,
+                  MaterialPageRoute(builder: (_) => const TransaksiScreen()));
             },
           ),
           ListTile(
@@ -270,11 +358,13 @@ class ForecastScreen extends StatelessWidget {
             title: const Text('Portofolio BCG'),
             onTap: () {
               Navigator.pop(context);
-              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const PortofolioScreen()));
+              Navigator.pushReplacement(context,
+                  MaterialPageRoute(builder: (_) => const PortofolioScreen()));
             },
           ),
           ListTile(
-            leading: const Icon(Icons.trending_up_rounded, color: AppTheme.primaryBlue),
+            leading: const Icon(Icons.trending_up_rounded,
+                color: AppTheme.primaryBlue),
             title: const Text('Forecasting'),
             onTap: () => Navigator.pop(context),
           ),
@@ -288,13 +378,17 @@ class ForecastScreen extends StatelessWidget {
       currentIndex: 0,
       onTap: (index) {
         if (index == 0) {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
+          Navigator.pushReplacement(context,
+              MaterialPageRoute(builder: (_) => const DashboardScreen()));
         } else if (index == 1) {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const UsahaScreen()));
+          Navigator.pushReplacement(
+              context, MaterialPageRoute(builder: (_) => const UsahaScreen()));
         } else if (index == 2) {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const TransaksiScreen()));
+          Navigator.pushReplacement(context,
+              MaterialPageRoute(builder: (_) => const TransaksiScreen()));
         } else if (index == 3) {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const PortofolioScreen()));
+          Navigator.pushReplacement(context,
+              MaterialPageRoute(builder: (_) => const PortofolioScreen()));
         }
       },
       selectedItemColor: AppTheme.primaryBlue,
@@ -302,10 +396,14 @@ class ForecastScreen extends StatelessWidget {
       type: BottomNavigationBarType.fixed,
       backgroundColor: AppTheme.surfaceWhite,
       items: const [
-        BottomNavigationBarItem(icon: Icon(Icons.dashboard_rounded), label: 'Dashboard'),
-        BottomNavigationBarItem(icon: Icon(Icons.storefront_rounded), label: 'Usaha'),
-        BottomNavigationBarItem(icon: Icon(Icons.receipt_long_rounded), label: 'Transaksi'),
-        BottomNavigationBarItem(icon: Icon(Icons.pie_chart_rounded), label: 'Portofolio'),
+        BottomNavigationBarItem(
+            icon: Icon(Icons.dashboard_rounded), label: 'Dashboard'),
+        BottomNavigationBarItem(
+            icon: Icon(Icons.storefront_rounded), label: 'Usaha'),
+        BottomNavigationBarItem(
+            icon: Icon(Icons.receipt_long_rounded), label: 'Transaksi'),
+        BottomNavigationBarItem(
+            icon: Icon(Icons.pie_chart_rounded), label: 'Portofolio'),
       ],
     );
   }

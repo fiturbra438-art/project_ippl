@@ -121,6 +121,7 @@ Pastikan tools berikut sudah terinstal di sistem Anda:
    cp .env.example .env
    ```
    Pastikan mengatur `JWT_SECRET` dengan string acak aman (minimal 32 karakter, misalnya hasil dari `openssl rand -base64 32`).
+   Tambahkan `AI_SERVICE_URL=http://127.0.0.1:8001` agar seluruh endpoint `/api/ai/*` diteruskan ke Python AI service (jika kosong, Core memakai implementasi AI internal Rust sebagai fallback).
 
 3. Jalankan server:
    ```bash
@@ -144,17 +145,31 @@ Pastikan tools berikut sudah terinstal di sistem Anda:
    pip install -r requirements.txt
    ```
 
-3. Konfigurasi file `.env`:
+3. Konfigurasi file `.env` (nilai `JWT_SECRET` **harus sama** dengan Core Rust agar token login dapat diverifikasi):
    ```env
    DATABASE_URL=postgresql://usaha_user:password_rahasia_anda@localhost:5432/usaha_db
+   JWT_SECRET=secret_yang_sama_dengan_core
+   CORS_ORIGIN=http://localhost:8000,http://localhost:8001
    PORT=8001
    ```
+   Skema database dikelola oleh Core Rust (`schema_database.sql`), jadi service AI tidak menjalankan Alembic/init DB saat start.
 
-4. Jalankan migrasi Alembic (jika diperlukan) dan jalankan server:
+4. Jalankan server:
    ```bash
    uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
    ```
    Dokumentasi OpenAPI Swagger tersedia di `http://localhost:8001/docs`.
+
+   Dengan `AI_SERVICE_URL` aktif di Core Rust, frontend tetap memanggil `http://localhost:8000/api/ai/*`; Core akan mem-proxy request ke service AI dan otomatis fallback ke implementasi Rust bila service AI tidak dapat dijangkau.
+
+5. Endpoint AI (semua membutuhkan header `Authorization: Bearer <token>`):
+   - `POST /api/ai/chat` — chatbot berbasis data PostgreSQL.
+   - `GET /api/ai/forecast/{unit_id}?horizon=7` — proyeksi omzet 7/30 hari.
+   - `GET /api/ai/forecast/{unit_id}/products?horizon=7` — prediksi permintaan per produk.
+   - `GET /api/ai/reallocation` — rekomendasi realokasi stok antar cabang.
+   - `GET /api/ai/anomali` — deteksi stok kritis, defisit, dan penurunan penjualan.
+   - `GET /api/ai/portfolio` — klasifikasi BCG dan kebijakan alokasi modal.
+   - `POST /api/ai/what-if` — simulasi alokasi surplus kas antar unit.
 
 ---
 

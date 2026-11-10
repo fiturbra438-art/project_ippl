@@ -1,4 +1,5 @@
 mod ai;
+mod ai_gateway;
 mod auth;
 mod dashboard;
 mod email;
@@ -173,9 +174,20 @@ async fn main() {
         // ==================== 8. MODUL AI & ANALYTICS ====================
         .route("/api/ai/chat", post(ai::chat_ai))
         .route("/api/ai/forecast/:unit_id", get(ai::get_forecast))
+        .route(
+            "/api/ai/forecast/:unit_id/products",
+            get(ai::get_product_forecast),
+        )
         .route("/api/ai/anomali", get(ai::get_anomali))
+        .route("/api/ai/reallocation", get(ai::get_reallocation))
+        .route("/api/ai/portfolio", get(ai::get_portfolio))
+        .route("/api/ai/what-if", post(ai::what_if))
         // Fallback Web UI Flutter
         .fallback_service(serve_dir)
+        .layer(axum::middleware::from_fn_with_state(
+            shared_state.clone(),
+            ai_gateway::forward_ai_request,
+        ))
         .layer(cors)
         .with_state(shared_state);
 

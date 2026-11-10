@@ -3,6 +3,8 @@ use sqlx::PgPool;
 pub struct AppState {
     pub db: PgPool,
     pub jwt_secret: String,
+    pub ai_service_url: Option<String>,
+    pub http: reqwest::Client,
 }
 
 impl AppState {
@@ -165,9 +167,21 @@ impl AppState {
         let jwt_secret = std::env::var("JWT_SECRET")
             .expect("JWT_SECRET wajib diatur dan tidak boleh memakai secret default");
 
+        let ai_service_url = std::env::var("AI_SERVICE_URL")
+            .ok()
+            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty());
+
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
         Self {
             db: pool,
             jwt_secret,
+            ai_service_url,
+            http,
         }
     }
 }

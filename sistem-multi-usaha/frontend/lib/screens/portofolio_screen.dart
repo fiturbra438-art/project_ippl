@@ -10,12 +10,28 @@ import 'dashboard_screen.dart';
 import 'usaha_screen.dart';
 import 'transaksi_screen.dart';
 
-class PortofolioScreen extends StatelessWidget {
+class PortofolioScreen extends StatefulWidget {
   const PortofolioScreen({super.key});
+
+  @override
+  State<PortofolioScreen> createState() => _PortofolioScreenState();
+}
+
+class _PortofolioScreenState extends State<PortofolioScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        context.read<PortofolioProvider>().fetchPortfolio();
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final isMobile = ResponsiveLayout.isMobile(context);
+    final provider = context.watch<PortofolioProvider>();
 
     return Scaffold(
       appBar: isMobile
@@ -24,7 +40,8 @@ class PortofolioScreen extends StatelessWidget {
               elevation: 0,
               title: const Text(
                 'Matriks Portofolio BCG',
-                style: TextStyle(color: AppTheme.primaryBlue, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                    color: AppTheme.primaryBlue, fontWeight: FontWeight.bold),
               ),
             )
           : null,
@@ -44,9 +61,22 @@ class PortofolioScreen extends StatelessWidget {
                   children: [
                     if (!isMobile) _buildDesktopHeader(),
                     const SizedBox(height: 24),
+                    if (provider.isLoading)
+                      const LinearProgressIndicator(minHeight: 2),
+                    if (provider.lastError != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Text(
+                          provider.lastError!,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFFDC2626),
+                          ),
+                        ),
+                      ),
                     _buildMatrixGrid(context, isMobile),
                     const SizedBox(height: 32),
-                    _buildAdviceSummaryCard(),
+                    _buildAdviceSummaryCard(context),
                   ],
                 ),
               ),
@@ -64,7 +94,10 @@ class PortofolioScreen extends StatelessWidget {
       children: const [
         Text(
           'Analisis Portofolio & Alokasi Modal (BCG Matrix)',
-          style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppTheme.textPrimary),
+          style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              color: AppTheme.textPrimary),
         ),
         SizedBox(height: 4),
         Text(
@@ -115,10 +148,12 @@ class PortofolioScreen extends StatelessWidget {
 
     if (isMobile) {
       return Column(
-        children: quadrants.map((q) => Padding(
-          padding: const EdgeInsets.only(bottom: 16),
-          child: _buildQuadrantCard(q),
-        )).toList(),
+        children: quadrants
+            .map((q) => Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: _buildQuadrantCard(q),
+                ))
+            .toList(),
       );
     }
 
@@ -128,10 +163,12 @@ class PortofolioScreen extends StatelessWidget {
         return Wrap(
           spacing: 20,
           runSpacing: 20,
-          children: quadrants.map((q) => SizedBox(
-            width: cardWidth,
-            child: _buildQuadrantCard(q),
-          )).toList(),
+          children: quadrants
+              .map((q) => SizedBox(
+                    width: cardWidth,
+                    child: _buildQuadrantCard(q),
+                  ))
+              .toList(),
         );
       },
     );
@@ -139,7 +176,8 @@ class PortofolioScreen extends StatelessWidget {
 
   Widget _buildQuadrantCard(Map<String, dynamic> q) {
     final List<BCGItem> items = q['items'];
-    final currency = NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
+    final currency =
+        NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -170,7 +208,10 @@ class PortofolioScreen extends StatelessWidget {
                 ),
                 child: Text(
                   '${items.length} Unit',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: q['color'] as Color),
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: q['color'] as Color),
                 ),
               ),
             ],
@@ -185,47 +226,56 @@ class PortofolioScreen extends StatelessWidget {
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 24),
               child: Center(
-                child: Text('Tidak ada unit usaha di kuadran ini', style: TextStyle(color: AppTheme.textMuted, fontSize: 13)),
+                child: Text('Tidak ada unit usaha di kuadran ini',
+                    style: TextStyle(color: AppTheme.textMuted, fontSize: 13)),
               ),
             )
           else
             ...items.map((item) => Container(
-              margin: const EdgeInsets.only(bottom: 12),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppTheme.cardBorder),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppTheme.cardBorder),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(item.namaUsaha, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(item.namaUsaha,
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold, fontSize: 14)),
+                          Text(
+                            currency.format(item.arusKas),
+                            style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: AppTheme.primaryBlue),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          _buildPill('Growth: +${item.growthRate}%'),
+                          const SizedBox(width: 6),
+                          _buildPill('Market Share: ${item.marketShare}x'),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
                       Text(
-                        currency.format(item.arusKas),
-                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.primaryBlue),
+                        '💡 ${item.rekomendasi}',
+                        style: const TextStyle(
+                            fontSize: 12,
+                            color: AppTheme.textSecondary,
+                            height: 1.3),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      _buildPill('Growth: +${item.growthRate}%'),
-                      const SizedBox(width: 6),
-                      _buildPill('Market Share: ${item.marketShare}x'),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '💡 ${item.rekomendasi}',
-                    style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.3),
-                  ),
-                ],
-              ),
-            )),
+                )),
         ],
       ),
     );
@@ -239,11 +289,26 @@ class PortofolioScreen extends StatelessWidget {
         borderRadius: BorderRadius.circular(6),
         border: Border.all(color: AppTheme.cardBorder),
       ),
-      child: Text(text, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+      child: Text(text,
+          style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
     );
   }
 
-  Widget _buildAdviceSummaryCard() {
+  Widget _buildAdviceSummaryCard(BuildContext context) {
+    final provider = context.watch<PortofolioProvider>();
+    final policies = provider.kebijakanAlokasi.isNotEmpty
+        ? provider.kebijakanAlokasi
+        : const [
+            'Alihkan 20% kas dari Cash Cow ke Question Mark untuk meningkatkan pangsa pasar sebelum pasar jenuh.',
+            'Dukung penuh kebutuhan ekspansi Star dari kas internal Star dan surplus Cash Cow.',
+            'Tinjau unit di kuadran Dog: jika pertumbuhan tidak membaik dalam 2 kuartal, lakukan divestasi aset.',
+          ];
+    final policyText = policies
+        .asMap()
+        .entries
+        .map((entry) => '${entry.key + 1}. ${entry.value}')
+        .join('\n');
+
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
@@ -260,23 +325,26 @@ class PortofolioScreen extends StatelessWidget {
               color: AppTheme.primaryBlue,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: const Icon(Icons.account_tree_rounded, color: Colors.white, size: 28),
+            child: const Icon(Icons.account_tree_rounded,
+                color: Colors.white, size: 28),
           ),
           const SizedBox(width: 18),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: const [
-                Text(
+              children: [
+                const Text(
                   'Kebijakan Alokasi Modal Strategis',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.primaryBlue),
+                  style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.primaryBlue),
                 ),
-                SizedBox(height: 6),
+                const SizedBox(height: 6),
                 Text(
-                  '1. Alihkan 20% kas dari Cash Cow ke Question Mark untuk meningkatkan pangsa pasar sebelum pasar jenuh.\n'
-                  '2. Dukung penuh kebutuhan ekspansi Star dari kas internal Star dan surplus Cash Cow.\n'
-                  '3. Tinjau unit di kuadran Dog: jika pertumbuhan tidak membaik dalam 2 kuartal, lakukan divestasi aset.',
-                  style: TextStyle(fontSize: 13, color: AppTheme.textPrimary, height: 1.5),
+                  policyText,
+                  style: const TextStyle(
+                      fontSize: 13, color: AppTheme.textPrimary, height: 1.5),
                 ),
               ],
             ),
@@ -297,9 +365,14 @@ class PortofolioScreen extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                Text('MultiUsaha', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                Text('MultiUsaha',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold)),
                 SizedBox(height: 4),
-                Text('Sistem Manajemen Portofolio', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                Text('Sistem Manajemen Portofolio',
+                    style: TextStyle(color: Colors.white70, fontSize: 13)),
               ],
             ),
           ),
@@ -308,7 +381,8 @@ class PortofolioScreen extends StatelessWidget {
             title: const Text('Dashboard'),
             onTap: () {
               Navigator.pop(context);
-              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
+              Navigator.pushReplacement(context,
+                  MaterialPageRoute(builder: (_) => const DashboardScreen()));
             },
           ),
           ListTile(
@@ -316,7 +390,8 @@ class PortofolioScreen extends StatelessWidget {
             title: const Text('Unit Usaha'),
             onTap: () {
               Navigator.pop(context);
-              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const UsahaScreen()));
+              Navigator.pushReplacement(context,
+                  MaterialPageRoute(builder: (_) => const UsahaScreen()));
             },
           ),
           ListTile(
@@ -324,11 +399,13 @@ class PortofolioScreen extends StatelessWidget {
             title: const Text('Transaksi'),
             onTap: () {
               Navigator.pop(context);
-              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const TransaksiScreen()));
+              Navigator.pushReplacement(context,
+                  MaterialPageRoute(builder: (_) => const TransaksiScreen()));
             },
           ),
           ListTile(
-            leading: const Icon(Icons.pie_chart_rounded, color: AppTheme.primaryBlue),
+            leading: const Icon(Icons.pie_chart_rounded,
+                color: AppTheme.primaryBlue),
             title: const Text('Portofolio BCG'),
             onTap: () => Navigator.pop(context),
           ),
@@ -342,11 +419,14 @@ class PortofolioScreen extends StatelessWidget {
       currentIndex: 3,
       onTap: (index) {
         if (index == 0) {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
+          Navigator.pushReplacement(context,
+              MaterialPageRoute(builder: (_) => const DashboardScreen()));
         } else if (index == 1) {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const UsahaScreen()));
+          Navigator.pushReplacement(
+              context, MaterialPageRoute(builder: (_) => const UsahaScreen()));
         } else if (index == 2) {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const TransaksiScreen()));
+          Navigator.pushReplacement(context,
+              MaterialPageRoute(builder: (_) => const TransaksiScreen()));
         }
       },
       selectedItemColor: AppTheme.primaryBlue,
@@ -354,10 +434,14 @@ class PortofolioScreen extends StatelessWidget {
       type: BottomNavigationBarType.fixed,
       backgroundColor: AppTheme.surfaceWhite,
       items: const [
-        BottomNavigationBarItem(icon: Icon(Icons.dashboard_rounded), label: 'Dashboard'),
-        BottomNavigationBarItem(icon: Icon(Icons.storefront_rounded), label: 'Usaha'),
-        BottomNavigationBarItem(icon: Icon(Icons.receipt_long_rounded), label: 'Transaksi'),
-        BottomNavigationBarItem(icon: Icon(Icons.pie_chart_rounded), label: 'Portofolio'),
+        BottomNavigationBarItem(
+            icon: Icon(Icons.dashboard_rounded), label: 'Dashboard'),
+        BottomNavigationBarItem(
+            icon: Icon(Icons.storefront_rounded), label: 'Usaha'),
+        BottomNavigationBarItem(
+            icon: Icon(Icons.receipt_long_rounded), label: 'Transaksi'),
+        BottomNavigationBarItem(
+            icon: Icon(Icons.pie_chart_rounded), label: 'Portofolio'),
       ],
     );
   }

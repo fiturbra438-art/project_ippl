@@ -9,6 +9,7 @@ use rust_decimal::prelude::ToPrimitive;
 use serde::Serialize;
 use std::sync::Arc;
 
+use crate::ai_gateway::ai_unavailable;
 use crate::models::Claims;
 use crate::schemas::{ApiResponse, ChatAiRequest, ChatAiResponse};
 use crate::state::AppState;
@@ -394,4 +395,43 @@ pub async fn get_anomali(
         }),
     )
         .into_response()
+}
+
+// 4. AI GATEWAY HANDLERS (diteruskan ke Python AI service saat AI_SERVICE_URL aktif)
+pub async fn get_product_forecast(
+    State(_state): State<Arc<AppState>>,
+    _claims: Claims,
+    Path(_unit_id): Path<i64>,
+) -> impl IntoResponse {
+    ai_unavailable(
+        "AI service belum dikonfigurasi. Set AI_SERVICE_URL pada Core Backend agar fitur prediksi per produk aktif.",
+    )
+}
+
+pub async fn get_reallocation(
+    State(_state): State<Arc<AppState>>,
+    _claims: Claims,
+) -> impl IntoResponse {
+    ai_unavailable(
+        "AI service belum dikonfigurasi. Set AI_SERVICE_URL pada Core Backend agar rekomendasi realokasi stok aktif.",
+    )
+}
+
+pub async fn get_portfolio(
+    State(_state): State<Arc<AppState>>,
+    _claims: Claims,
+) -> impl IntoResponse {
+    ai_unavailable(
+        "AI service belum dikonfigurasi. Set AI_SERVICE_URL pada Core Backend agar analisis portofolio BCG aktif.",
+    )
+}
+
+pub async fn what_if(
+    State(_state): State<Arc<AppState>>,
+    _claims: Claims,
+    Json(_payload): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    ai_unavailable(
+        "AI service belum dikonfigurasi. Set AI_SERVICE_URL pada Core Backend agar simulasi what-if aktif.",
+    )
 }
