@@ -48,43 +48,40 @@ pub async fn chat_ai(
     claims: Claims,
     Json(payload): Json<ChatAiRequest>,
 ) -> impl IntoResponse {
+    if state.ai_service_url.is_none() || payload.conversation_id.is_some() {
+        return ai_unavailable("AI service belum dikonfigurasi.");
+    }
     let owner_id = claims.owner_id;
 
-    // 1. Cek & Potong Kuota AI di Database PostgreSQL
-    let user_info = sqlx::query_as::<_, (i32, Option<i32>, Option<String>, Option<String>)>(
-        "SELECT id, sisa_kuota_ai, nama_perusahaan, tier FROM users WHERE id = $1",
+    let user_info = sqlx::query_as::<_, (i32, Option<String>, Option<String>)>(
+        "SELECT id, nama_perusahaan, tier FROM users WHERE id = $1",
     )
     .bind(owner_id as i32)
     .fetch_optional(&state.db)
     .await;
-
-    let (sisa_kuota, nama_bisnis) = match user_info {
-        Ok(Some((uid, kuota_opt, nama_opt, _tier_opt))) => {
-            let kuota = kuota_opt.unwrap_or(250);
-            if kuota <= 0 {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(ApiResponse::<ChatAiResponse> {
-                        status: "error".to_string(),
-                        message: "Kuota pertanyaan AI Anda telah habis. Silakan hubungi admin atau upgrade paket Anda.".to_string(),
-                        data: None,
-                    }),
-                ).into_response();
-            }
-
-            // Kurangi kuota di PostgreSQL
-            let _ = sqlx::query("UPDATE users SET sisa_kuota_ai = sisa_kuota_ai - 1 WHERE id = $1")
-                .bind(uid)
-                .execute(&state.db)
-                .await;
-
-            (
-                kuota - 1,
-                nama_opt.unwrap_or_else(|| "Grup Bisnis".to_string()),
-            )
-        }
-        _ => (250, "Grup Bisnis".to_string()),
+    let Some((uid, nama_opt, _tier_opt)) = user_info.ok().flatten() else {
+        return ai_unavailable("Pengguna tidak ditemukan.");
     };
+    let Some(sisa_kuota) = sqlx::query_scalar::<_, i32>(
+        "UPDATE users SET sisa_kuota_ai = COALESCE(sisa_kuota_ai, 250) - 1
+         WHERE id = $1 AND COALESCE(sisa_kuota_ai, 250) > 0
+         RETURNING sisa_kuota_ai",
+    )
+    .bind(uid)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten() else {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<ChatAiResponse> {
+                status: "error".to_string(),
+                message: "Kuota pertanyaan AI Anda telah habis.".to_string(),
+                data: None,
+            }),
+        ).into_response();
+    };
+    let nama_bisnis = nama_opt.unwrap_or_else(|| "Grup Bisnis".to_string());
 
     // 2. Baca Data Finansial Nyata dari PostgreSQL
     let total_usaha: i64 =
@@ -152,7 +149,8 @@ pub async fn chat_ai(
         })
         .collect();
 
-    let query_lower = payload.pesan.to_lowercase();
+    let message = payload.message.or(payload.pesan).unwrap_or_default();
+    let query_lower = message.to_lowercase();
     let balasan = if query_lower.contains("omzet")
         || query_lower.contains("pendapatan")
         || query_lower.contains("penjualan")
@@ -398,6 +396,21 @@ pub async fn get_anomali(
 }
 
 // 4. AI GATEWAY HANDLERS (diteruskan ke Python AI service saat AI_SERVICE_URL aktif)
+pub async fn list_conversations(
+    State(_state): State<Arc<AppState>>,
+    _claims: Claims,
+) -> impl IntoResponse {
+    ai_unavailable("AI service belum dikonfigurasi untuk riwayat percakapan.")
+}
+
+pub async fn list_messages(
+    State(_state): State<Arc<AppState>>,
+    _claims: Claims,
+    Path(_id): Path<i64>,
+) -> impl IntoResponse {
+    ai_unavailable("AI service belum dikonfigurasi untuk riwayat percakapan.")
+}
+
 pub async fn get_product_forecast(
     State(_state): State<Arc<AppState>>,
     _claims: Claims,

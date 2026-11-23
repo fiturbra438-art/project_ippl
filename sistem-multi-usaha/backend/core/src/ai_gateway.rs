@@ -1,5 +1,5 @@
 use axum::{
-    body::{to_bytes, Body, Bytes},
+    body::{to_bytes, Body},
     extract::{Request, State},
     http::{header, StatusCode},
     middleware::Next,
@@ -22,10 +22,9 @@ pub async fn forward_ai_request(
         return next.run(request).await;
     };
 
-    if !request.uri().path().starts_with("/api/ai/") {
+    if !request.uri().path().starts_with("/api/ai/") && !request.uri().path().starts_with("/ai/") {
         return next.run(request).await;
     }
-
     let method = request.method().clone();
     let path_and_query = request
         .uri()
@@ -33,7 +32,7 @@ pub async fn forward_ai_request(
         .map(|value| value.as_str().to_string())
         .unwrap_or_else(|| request.uri().path().to_string());
     let headers = request.headers().clone();
-    let (parts, body) = request.into_parts();
+    let (_, body) = request.into_parts();
 
     let body_bytes = match to_bytes(body, MAX_AI_BODY_BYTES).await {
         Ok(bytes) => bytes,
@@ -67,7 +66,6 @@ pub async fn forward_ai_request(
             .header(header::CONTENT_TYPE, "application/json")
             .body(body_bytes.clone());
     }
-
     match builder.send().await {
         Ok(response) => {
             let status =
@@ -87,24 +85,19 @@ pub async fn forward_ai_request(
                 }
                 Err(err) => {
                     tracing::warn!("Gagal membaca respons AI service: {}", err);
-                    next.run(restore_request(parts, body_bytes)).await
+                    ai_error(StatusCode::BAD_GATEWAY, "Respons AI service tidak dapat dibaca.")
                 }
             }
         }
         Err(err) => {
-            tracing::warn!(
-                "AI service tidak dapat dijangkau ({}). Menggunakan fallback Core Rust.",
-                err
-            );
-            next.run(restore_request(parts, body_bytes)).await
+            tracing::warn!("AI service tidak dapat dijangkau: {}", err);
+            ai_error(StatusCode::BAD_GATEWAY, "AI service tidak dapat dijangkau.")
         }
     }
 }
-
 pub fn ai_unavailable(message: &str) -> Response {
     ai_error(StatusCode::SERVICE_UNAVAILABLE, message)
 }
-
 fn ai_error(status: StatusCode, message: &str) -> Response {
     (
         status,
@@ -115,8 +108,4 @@ fn ai_error(status: StatusCode, message: &str) -> Response {
         }),
     )
         .into_response()
-}
-
-fn restore_request(parts: axum::http::request::Parts, bytes: Bytes) -> Request {
-    Request::from_parts(parts, Body::from(bytes))
 }

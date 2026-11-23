@@ -20,3 +20,7 @@ CORS_ORIGIN = os.getenv(
 )
 
 PORT = int(os.getenv("PORT", "8001"))
+AI_CHAT_MODE = os.getenv("AI_CHAT_MODE", "disabled")
+AI_BASE_URL = os.getenv("AI_BASE_URL", "https://api.openai.com/v1")
+AI_MODEL = os.getenv("AI_MODEL", "")
+AI_API_KEY = os.getenv("AI_API_KEY", "")

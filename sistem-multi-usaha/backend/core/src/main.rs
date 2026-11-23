@@ -173,6 +173,9 @@ async fn main() {
         .route("/api/audit-logs", get(karyawan::list_audit_logs))
         // ==================== 8. MODUL AI & ANALYTICS ====================
         .route("/api/ai/chat", post(ai::chat_ai))
+        .route("/ai/chat", post(ai::chat_ai))
+        .route("/ai/conversations", get(ai::list_conversations))
+        .route("/ai/conversations/:id/messages", get(ai::list_messages))
         .route("/api/ai/forecast/:unit_id", get(ai::get_forecast))
         .route(
             "/api/ai/forecast/:unit_id/products",

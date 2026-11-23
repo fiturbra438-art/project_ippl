@@ -13,6 +13,7 @@ class ChatSession(TimestampMixin, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     waktu_mulai: Mapped[datetime] = mapped_column(server_default=func.now())
+    title: Mapped[str] = mapped_column(Text, default="Percakapan", server_default="Percakapan")
 
     pesan = relationship(
         "ChatMessage", back_populates="sesi", cascade="all, delete-orphan",

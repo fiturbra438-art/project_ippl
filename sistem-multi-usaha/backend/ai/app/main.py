@@ -45,6 +45,7 @@ def health(db: Session = Depends(get_db)):
 
 
 app.include_router(chat.router, prefix="/api/ai", tags=["AI Chat"])
+app.include_router(chat.router, prefix="/ai", tags=["AI Chat"])
 app.include_router(forecast.router, prefix="/api/ai", tags=["AI Forecasting"])
 app.include_router(laporan.router, prefix="/api/ai", tags=["AI Anomali"])
 app.include_router(portofolio.router, prefix="/api/ai", tags=["AI Portofolio"])

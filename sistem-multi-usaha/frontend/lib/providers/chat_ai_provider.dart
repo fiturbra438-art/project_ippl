@@ -3,87 +3,178 @@ import '../models/chat_model.dart';
 import '../services/api_service.dart';
 
 class ChatAiProvider extends ChangeNotifier {
-  final List<ChatMessageModel> _messages = [
-    ChatMessageModel(
-      id: '1',
-      content: 'Halo! Saya Asisten AI Finansial & Portofolio Bisnis Anda. Saya terhubung langsung dengan data keuangan cabang, kasir POS, dan inventaris gudang Anda. Ada yang bisa saya bantu analisa?',
-      isUser: false,
-      timestamp: DateTime.now(),
-      suggestions: [
-        'Berapa total omzet usaha saya saat ini?',
-        'Apakah ada produk yang stoknya kritis?',
-        'Berikan saran strategi alokasi modal',
-      ],
-    ),
-  ];
+  ChatAiProvider({
+    Future<Map<String, dynamic>?> Function(String)? get,
+    Future<Map<String, dynamic>?> Function(String, Map<String, dynamic>,
+            {Duration timeout})?
+        post,
+  })  : _get = get ?? ApiService.get,
+        _post = post ?? ApiService.post;
 
+  final Future<Map<String, dynamic>?> Function(String) _get;
+  final Future<Map<String, dynamic>?> Function(String, Map<String, dynamic>,
+      {Duration timeout}) _post;
+  final List<ChatMessageModel> _messages = [];
+  final List<ChatConversationModel> _conversations = [];
+  String? _conversationId;
+  bool _isLoading = false;
   bool _isTyping = false;
-  int _sisaKuotaAi = 250;
+  int? _sisaKuotaAi;
+  String? _error;
+  String? _failedMessage;
 
-  List<ChatMessageModel> get messages => _messages;
+  List<ChatMessageModel> get messages => List.unmodifiable(_messages);
+  List<ChatConversationModel> get conversations =>
+      List.unmodifiable(_conversations);
+  String? get conversationId => _conversationId;
+  bool get isLoading => _isLoading;
   bool get isTyping => _isTyping;
-  int get sisaKuotaAi => _sisaKuotaAi;
+  bool get isBusy => _isLoading || _isTyping;
+  bool get canRetry => _failedMessage != null && !isBusy;
+  int? get sisaKuotaAi => _sisaKuotaAi;
+  String? get error => _error;
 
-  Future<void> sendMessage(String text) async {
-    if (text.trim().isEmpty) return;
-
-    final userMsg = ChatMessageModel(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      content: text,
-      isUser: true,
-      timestamp: DateTime.now(),
-    );
-
-    _messages.add(userMsg);
-    _isTyping = true;
+  Future<void> loadConversations() async {
+    if (isBusy) return;
+    _isLoading = true;
+    _error = null;
     notifyListeners();
+    await _fetchConversations();
+    _isLoading = false;
+    notifyListeners();
+  }
 
-    String reply = '';
-
+  Future<void> _fetchConversations() async {
     try {
-      // Panggil backend Core Rust endpoint AI
-      final res = await ApiService.post('/ai/chat', {
-        'pesan': text,
-      });
+      final response = await _get('/ai/conversations');
+      final items = _payload(response)['conversations'];
+      if (_isError(response) || items is! List) {
+        _error = _errorMessage(response);
+        return;
+      }
+      final conversations = items
+          .map((item) =>
+              ChatConversationModel.fromJson(Map<String, dynamic>.from(item)))
+          .toList();
+      _conversations
+        ..clear()
+        ..addAll(conversations);
+    } catch (e) {
+      _error = e.toString();
+    }
+  }
 
-      if (res != null && res['status'] == 'success' && res['data'] != null) {
-        reply = res['data']['balasan'] as String? ?? 'Tidak ada respon dari AI.';
-        if (res['data']['sisa_kuota_ai'] != null) {
-          _sisaKuotaAi = res['data']['sisa_kuota_ai'] as int;
-        }
-      } else if (res != null && res['message'] != null) {
-        reply = '⚠️ ${res['message']}';
+  Future<void> loadMessages(String id) async {
+    if (isBusy) return;
+    _isLoading = true;
+    _error = null;
+    _failedMessage = null;
+    _messages.clear();
+    _conversationId = null;
+    notifyListeners();
+    try {
+      final response =
+          await _get('/ai/conversations/${Uri.encodeComponent(id)}/messages');
+      final items = _payload(response)['messages'];
+      if (_isError(response) || items is! List) {
+        _error = _errorMessage(response);
       } else {
-        // Fallback jika backend offline/tidak terjangkau
-        reply = _localFallbackReply(text);
+        final messages = items
+            .map((item) =>
+                ChatMessageModel.fromJson(Map<String, dynamic>.from(item)))
+            .toList();
+        _messages.addAll(messages);
+        _conversationId = id;
       }
     } catch (e) {
-      debugPrint('ChatAiProvider.sendMessage error: $e');
-      reply = _localFallbackReply(text);
+      _error = e.toString();
+    } finally {
+      _isLoading = false;
+      notifyListeners();
     }
+  }
 
-    _messages.add(
-      ChatMessageModel(
-        id: (DateTime.now().millisecondsSinceEpoch + 1).toString(),
-        content: reply,
-        isUser: false,
-        timestamp: DateTime.now(),
-      ),
-    );
-
-    _isTyping = false;
+  void startNewConversation() {
+    if (isBusy) return;
+    _conversationId = null;
+    _messages.clear();
+    _failedMessage = null;
+    _error = null;
     notifyListeners();
   }
 
-  String _localFallbackReply(String text) {
-    final lower = text.toLowerCase();
-    if (lower.contains('omzet') || lower.contains('pendapatan')) {
-      return 'Total omzet bisnis Anda terpantau langsung melalui sistem konsolidasi POS dan pencatatan kas unit usaha.';
-    } else if (lower.contains('stok') || lower.contains('kritis')) {
-      return 'Pengecekan stok otomatis aktif. Barang yang mencapai batas minimum akan langsung terdata di Peringatan Stok Kritis.';
-    } else {
-      return 'Saya siap membantu menganalisis kesehatan finansial, evaluasi cabang, maupun efisiensi biaya usaha Anda.';
+  Future<void> sendMessage(String text) async {
+    if (text.trim().isEmpty || isBusy) return;
+    final message = text.trim();
+    _messages.add(ChatMessageModel(
+      id: DateTime.now().microsecondsSinceEpoch.toString(),
+      content: message,
+      isUser: true,
+      timestamp: DateTime.now(),
+    ));
+    await _send(message);
+  }
+
+  Future<void> retry() async {
+    if (!canRetry) return;
+    await _send(_failedMessage!);
+  }
+
+  Future<void> _send(String message) async {
+    _isTyping = true;
+    _error = null;
+    _failedMessage = null;
+    notifyListeners();
+    try {
+      final response = await _post(
+          '/ai/chat',
+          {
+            'message': message,
+            if (_conversationId != null) 'conversation_id': _conversationId,
+          },
+          timeout: const Duration(seconds: 40));
+      final data = _payload(response);
+      final reply = data['reply'] ?? data['balasan'];
+      if (_isError(response) || reply is! String) {
+        _failedMessage = message;
+        _error = _errorMessage(response);
+      } else {
+        _conversationId =
+            data['conversation_id']?.toString() ?? _conversationId;
+        _sisaKuotaAi =
+            _intValue(data['remaining_quota'] ?? data['sisa_kuota_ai']) ??
+                _sisaKuotaAi;
+        _messages.add(ChatMessageModel(
+          id: DateTime.now().microsecondsSinceEpoch.toString(),
+          content: reply,
+          isUser: false,
+          timestamp: DateTime.now(),
+        ));
+        await _fetchConversations();
+      }
+    } catch (e) {
+      _failedMessage = message;
+      _error = e.toString();
+    } finally {
+      _isTyping = false;
+      notifyListeners();
     }
   }
-}
 
+  Map<String, dynamic> _payload(Map<String, dynamic>? response) => {
+        if (response?['data'] is Map)
+          ...Map<String, dynamic>.from(response!['data']),
+        ...?response,
+      };
+
+  bool _isError(Map<String, dynamic>? response) =>
+      response == null ||
+      response['status'] == 'error' ||
+      (response['statusCode'] is int && response['statusCode'] >= 400);
+
+  String _errorMessage(Map<String, dynamic>? response) =>
+      response?['message']?.toString() ?? 'Gagal memuat percakapan.';
+
+  int? _intValue(dynamic value) =>
+      value is num ? value.toInt() : int.tryParse(value?.toString() ?? '');
+}

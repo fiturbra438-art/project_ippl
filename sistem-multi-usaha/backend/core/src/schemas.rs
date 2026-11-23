@@ -249,7 +249,9 @@ pub struct UpdateStatusTransferRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct ChatAiRequest {
-    pub pesan: String,
+    pub message: Option<String>,
+    pub pesan: Option<String>,
+    pub conversation_id: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]

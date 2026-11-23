@@ -49,7 +49,8 @@ class ApiService {
     return map;
   }
 
-  static Map<String, dynamic> _parseOrError(http.Response res, String endpoint) {
+  static Map<String, dynamic> _parseOrError(
+      http.Response res, String endpoint) {
     final isSuccessStatus = res.statusCode >= 200 && res.statusCode < 300;
     if (res.body.isNotEmpty) {
       try {
@@ -62,7 +63,8 @@ class ApiService {
           return decoded;
         }
       } catch (e) {
-        debugPrint('API JSON decode error on $endpoint (${res.statusCode}): $e');
+        debugPrint(
+            'API JSON decode error on $endpoint (${res.statusCode}): $e');
       }
     }
 
@@ -95,7 +97,8 @@ class ApiService {
         return _parseOrError(res, endpoint);
       }
       final err = _parseOrError(res, endpoint);
-      debugPrint('API GET failed on $endpoint (${res.statusCode}): ${err['message']}');
+      debugPrint(
+          'API GET failed on $endpoint (${res.statusCode}): ${err['message']}');
       return err;
     } on TimeoutException {
       final ex = ApiException(
@@ -113,7 +116,8 @@ class ApiService {
 
   // Generic POST
   static Future<Map<String, dynamic>?> post(
-      String endpoint, Map<String, dynamic> body) async {
+      String endpoint, Map<String, dynamic> body,
+      {Duration timeout = defaultTimeout}) async {
     try {
       final uri = Uri.parse('$baseUrl$endpoint');
       final res = await http
@@ -122,12 +126,12 @@ class ApiService {
             headers: headers,
             body: jsonEncode(body),
           )
-          .timeout(defaultTimeout);
+          .timeout(timeout);
       return _parseOrError(res, endpoint);
     } on TimeoutException {
       final ex = ApiException(
         endpoint: endpoint,
-        message: 'Waktu koneksi habis (timeout ${defaultTimeout.inSeconds}s).',
+        message: 'Waktu koneksi habis (timeout ${timeout.inSeconds}s).',
       );
       debugPrint('$ex');
       return {'status': 'error', 'message': ex.message};
@@ -182,7 +186,8 @@ class ApiService {
       if (res.statusCode >= 200 && res.statusCode < 300) {
         return true;
       }
-      debugPrint('API DELETE failed on $endpoint with status ${res.statusCode}');
+      debugPrint(
+          'API DELETE failed on $endpoint with status ${res.statusCode}');
       return false;
     } on TimeoutException {
       debugPrint(

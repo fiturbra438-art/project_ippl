@@ -1,11 +1,27 @@
 from datetime import date, datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class ChatAiRequest(BaseModel):
-    pesan: str = Field(min_length=1, max_length=2000)
+    message: Optional[str] = Field(default=None, min_length=1, max_length=2000)
+    pesan: Optional[str] = Field(default=None, min_length=1, max_length=2000)
+    conversation_id: Optional[int] = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_message(self):
+        if not (self.message or self.pesan or "").strip():
+            raise ValueError("message is required")
+        if self.message and self.pesan and self.message != self.pesan:
+            raise ValueError("message and pesan must match")
+        return self
+
+    def chat_message(self) -> str:
+        value = self.message or self.pesan
+        if value is None:
+            raise ValueError("message is required")
+        return value
 
 
 class ChatAiResponse(BaseModel):

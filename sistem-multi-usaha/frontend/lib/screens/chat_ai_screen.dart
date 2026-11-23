@@ -7,10 +7,7 @@ import '../widgets/responsive_layout.dart';
 import '../widgets/app_sidebar.dart';
 import 'dashboard_screen.dart';
 import 'usaha_screen.dart';
-import 'produk_screen.dart';
 import 'transaksi_screen.dart';
-import 'portofolio_screen.dart';
-import 'forecast_screen.dart';
 import 'laporan_screen.dart';
 
 class ChatAiScreen extends StatefulWidget {
@@ -24,17 +21,35 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
   final TextEditingController _inputCtrl = TextEditingController();
   final ScrollController _scrollCtrl = ScrollController();
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      context.read<ChatAiProvider>().loadConversations();
+    });
+  }
+
+  @override
+  void dispose() {
+    _inputCtrl.dispose();
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
+
   void _kirimPesan() {
     final text = _inputCtrl.text;
-    if (text.trim().isEmpty) return;
+    if (text.trim().isEmpty || context.read<ChatAiProvider>().isBusy) return;
     _inputCtrl.clear();
-    context.read<ChatAiProvider>().sendMessage(text);
-    _scrollToBottom();
+    context
+        .read<ChatAiProvider>()
+        .sendMessage(text)
+        .then((_) => _scrollToBottom());
   }
 
   void _scrollToBottom() {
     Future.delayed(const Duration(milliseconds: 150), () {
-      if (_scrollCtrl.hasClients) {
+      if (mounted && _scrollCtrl.hasClients) {
         _scrollCtrl.animateTo(
           _scrollCtrl.position.maxScrollExtent,
           duration: const Duration(milliseconds: 300),
@@ -54,7 +69,10 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
           ? AppBar(
               backgroundColor: AppTheme.surfaceWhite,
               elevation: 0,
-              title: const Text('Asisten AI Finansial', style: TextStyle(color: AppTheme.primaryBlue, fontWeight: FontWeight.bold)),
+              title: const Text('Asisten AI Finansial',
+                  style: TextStyle(
+                      color: AppTheme.primaryBlue,
+                      fontWeight: FontWeight.bold)),
             )
           : null,
       drawer: isMobile ? _buildNavigationDrawer(context) : null,
@@ -64,12 +82,15 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
           Expanded(
             child: SafeArea(
               child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: isMobile ? 16 : 32, vertical: 20),
+                padding: EdgeInsets.symmetric(
+                    horizontal: isMobile ? 16 : 32, vertical: 20),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     if (!isMobile) _buildDesktopHeader(),
                     if (!isMobile) const SizedBox(height: 16),
+                    _buildConversationBar(provider),
+                    const SizedBox(height: 12),
                     Expanded(
                       child: Container(
                         decoration: BoxDecoration(
@@ -80,33 +101,65 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
                         child: Column(
                           children: [
                             Expanded(
-                              child: ListView.separated(
-                                controller: _scrollCtrl,
-                                padding: const EdgeInsets.all(20),
-                                itemCount: provider.messages.length,
-                                separatorBuilder: (_, __) => const SizedBox(height: 16),
-                                itemBuilder: (context, index) {
-                                  final msg = provider.messages[index];
-                                  return _buildMessageBubble(msg);
-                                },
-                              ),
+                              child: provider.isLoading &&
+                                      provider.messages.isEmpty
+                                  ? const Center(
+                                      child: CircularProgressIndicator())
+                                  : ListView.separated(
+                                      controller: _scrollCtrl,
+                                      padding: const EdgeInsets.all(20),
+                                      itemCount: provider.messages.length,
+                                      separatorBuilder: (_, __) =>
+                                          const SizedBox(height: 16),
+                                      itemBuilder: (context, index) {
+                                        final msg = provider.messages[index];
+                                        return _buildMessageBubble(msg);
+                                      },
+                                    ),
                             ),
+                            if (provider.error != null)
+                              Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                        child: Text(provider.error!,
+                                            style: const TextStyle(
+                                                color: Colors.red,
+                                                fontSize: 12))),
+                                    if (provider.canRetry)
+                                      TextButton(
+                                        onPressed: provider.retry,
+                                        child: const Text('Coba lagi'),
+                                      ),
+                                  ],
+                                ),
+                              ),
                             if (provider.isTyping)
                               Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 20, vertical: 8),
                                 child: Row(
                                   children: const [
                                     SizedBox(
                                       width: 14,
                                       height: 14,
-                                      child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primaryBlue),
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: AppTheme.primaryBlue),
                                     ),
                                     SizedBox(width: 8),
-                                    Text('AI sedang menganalisis data portofolio...', style: TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+                                    Text(
+                                        'AI sedang menganalisis data portofolio...',
+                                        style: TextStyle(
+                                            fontSize: 12,
+                                            color: AppTheme.textMuted)),
                                   ],
                                 ),
                               ),
-                            const Divider(height: 1, color: AppTheme.cardBorder),
+                            const Divider(
+                                height: 1, color: AppTheme.cardBorder),
                             _buildInputBar(),
                           ],
                         ),
@@ -123,6 +176,63 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
     );
   }
 
+  Widget _buildConversationBar(ChatAiProvider provider) {
+    return Row(
+      children: [
+        Expanded(
+          child: DropdownButtonFormField<String?>(
+            key: ValueKey('${provider.conversationId}:${provider.isBusy}'),
+            initialValue: provider.conversationId,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: 'Percakapan',
+              prefixIcon: Icon(Icons.history_rounded),
+              border: OutlineInputBorder(),
+              isDense: true,
+            ),
+            items: [
+              const DropdownMenuItem<String?>(
+                  value: null, child: Text('Percakapan baru')),
+              if (provider.conversationId != null &&
+                  !provider.conversations
+                      .any((c) => c.id == provider.conversationId))
+                DropdownMenuItem<String?>(
+                  value: provider.conversationId,
+                  child: const Text('Percakapan aktif'),
+                ),
+              ...provider.conversations
+                  .map((conversation) => DropdownMenuItem<String?>(
+                        value: conversation.id,
+                        child: Text(conversation.title,
+                            overflow: TextOverflow.ellipsis),
+                      )),
+            ],
+            onChanged: provider.isBusy
+                ? null
+                : (id) {
+                    if (id == null) {
+                      provider.startNewConversation();
+                    } else {
+                      provider.loadMessages(id);
+                    }
+                  },
+          ),
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          tooltip: 'Percakapan baru',
+          onPressed: provider.isBusy ? null : provider.startNewConversation,
+          icon: const Icon(Icons.add_comment_outlined),
+        ),
+        IconButton(
+          tooltip: 'Muat ulang',
+          onPressed: provider.isBusy ? null : provider.loadConversations,
+          icon: const Icon(Icons.refresh_rounded),
+        ),
+      ],
+    );
+  }
+
   Widget _buildDesktopHeader() {
     final sisaKuota = context.watch<ChatAiProvider>().sisaKuotaAi;
 
@@ -133,15 +243,25 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
           children: [
             Container(
               padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: AppTheme.lightBlueBg, borderRadius: BorderRadius.circular(10)),
-              child: const Icon(Icons.auto_awesome_rounded, color: AppTheme.primaryBlue, size: 24),
+              decoration: BoxDecoration(
+                  color: AppTheme.lightBlueBg,
+                  borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.auto_awesome_rounded,
+                  color: AppTheme.primaryBlue, size: 24),
             ),
             const SizedBox(width: 12),
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: const [
-                Text('Konsultasi & Insight AI BI', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: AppTheme.textPrimary)),
-                Text('Tanyakan apa saja seputar data keuangan, alokasi BCG, dan performa cabang.', style: TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+                Text('Konsultasi & Insight AI BI',
+                    style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                        color: AppTheme.textPrimary)),
+                Text(
+                    'Tanyakan apa saja seputar data keuangan, alokasi BCG, dan performa cabang.',
+                    style:
+                        TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
               ],
             ),
           ],
@@ -155,11 +275,15 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
           ),
           child: Row(
             children: [
-              const Icon(Icons.bolt_rounded, size: 18, color: AppTheme.accentGreen),
+              const Icon(Icons.bolt_rounded,
+                  size: 18, color: AppTheme.accentGreen),
               const SizedBox(width: 6),
               Text(
-                'Sisa Kuota AI: $sisaKuota Tanya',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.accentGreen),
+                'Sisa Kuota AI: ${sisaKuota ?? '-'} Tanya',
+                style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                    color: AppTheme.accentGreen),
               ),
             ],
           ),
@@ -174,7 +298,8 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 600),
         child: Column(
-          crossAxisAlignment: msg.isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          crossAxisAlignment:
+              msg.isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
           children: [
             Container(
               padding: const EdgeInsets.all(16),
@@ -203,7 +328,9 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
                 runSpacing: 6,
                 children: msg.suggestions!.map((sug) {
                   return ActionChip(
-                    label: Text(sug, style: const TextStyle(fontSize: 12, color: AppTheme.primaryBlue)),
+                    label: Text(sug,
+                        style: const TextStyle(
+                            fontSize: 12, color: AppTheme.primaryBlue)),
                     backgroundColor: AppTheme.surfaceWhite,
                     side: const BorderSide(color: AppTheme.cardBorder),
                     onPressed: () {
@@ -227,11 +354,14 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
         children: [
           Expanded(
             child: TextField(
+              enabled: !context.watch<ChatAiProvider>().isBusy,
               controller: _inputCtrl,
               onSubmitted: (_) => _kirimPesan(),
               decoration: InputDecoration(
-                hintText: 'Tanyakan sesuatu (contoh: Bagaimana tren laba bulan ini?)...',
-                hintStyle: const TextStyle(fontSize: 13, color: AppTheme.textMuted),
+                hintText:
+                    'Tanyakan sesuatu (contoh: Bagaimana tren laba bulan ini?)...',
+                hintStyle:
+                    const TextStyle(fontSize: 13, color: AppTheme.textMuted),
                 border: InputBorder.none,
                 contentPadding: const EdgeInsets.symmetric(horizontal: 16),
               ),
@@ -239,7 +369,8 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
           ),
           IconButton(
             icon: const Icon(Icons.send_rounded, color: AppTheme.primaryBlue),
-            onPressed: _kirimPesan,
+            onPressed:
+                context.watch<ChatAiProvider>().isBusy ? null : _kirimPesan,
           ),
         ],
       ),
@@ -257,9 +388,14 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                Text('MultiUsaha', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                Text('MultiUsaha',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold)),
                 SizedBox(height: 4),
-                Text('Sistem Manajemen Portofolio', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                Text('Sistem Manajemen Portofolio',
+                    style: TextStyle(color: Colors.white70, fontSize: 13)),
               ],
             ),
           ),
@@ -268,7 +404,8 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
             title: const Text('Dashboard'),
             onTap: () {
               Navigator.pop(context);
-              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
+              Navigator.pushReplacement(context,
+                  MaterialPageRoute(builder: (_) => const DashboardScreen()));
             },
           ),
           ListTile(
@@ -276,11 +413,13 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
             title: const Text('Laporan Keuangan'),
             onTap: () {
               Navigator.pop(context);
-              Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LaporanScreen()));
+              Navigator.pushReplacement(context,
+                  MaterialPageRoute(builder: (_) => const LaporanScreen()));
             },
           ),
           ListTile(
-            leading: const Icon(Icons.smart_toy_rounded, color: AppTheme.primaryBlue),
+            leading: const Icon(Icons.smart_toy_rounded,
+                color: AppTheme.primaryBlue),
             title: const Text('Asisten AI'),
             onTap: () => Navigator.pop(context),
           ),
@@ -294,13 +433,17 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
       currentIndex: 0,
       onTap: (index) {
         if (index == 0) {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const DashboardScreen()));
+          Navigator.pushReplacement(context,
+              MaterialPageRoute(builder: (_) => const DashboardScreen()));
         } else if (index == 1) {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const UsahaScreen()));
+          Navigator.pushReplacement(
+              context, MaterialPageRoute(builder: (_) => const UsahaScreen()));
         } else if (index == 2) {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const TransaksiScreen()));
+          Navigator.pushReplacement(context,
+              MaterialPageRoute(builder: (_) => const TransaksiScreen()));
         } else if (index == 3) {
-          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LaporanScreen()));
+          Navigator.pushReplacement(context,
+              MaterialPageRoute(builder: (_) => const LaporanScreen()));
         }
       },
       selectedItemColor: AppTheme.primaryBlue,
@@ -308,10 +451,14 @@ class _ChatAiScreenState extends State<ChatAiScreen> {
       type: BottomNavigationBarType.fixed,
       backgroundColor: AppTheme.surfaceWhite,
       items: const [
-        BottomNavigationBarItem(icon: Icon(Icons.dashboard_rounded), label: 'Dashboard'),
-        BottomNavigationBarItem(icon: Icon(Icons.storefront_rounded), label: 'Usaha'),
-        BottomNavigationBarItem(icon: Icon(Icons.receipt_long_rounded), label: 'Transaksi'),
-        BottomNavigationBarItem(icon: Icon(Icons.assessment_rounded), label: 'Laporan'),
+        BottomNavigationBarItem(
+            icon: Icon(Icons.dashboard_rounded), label: 'Dashboard'),
+        BottomNavigationBarItem(
+            icon: Icon(Icons.storefront_rounded), label: 'Usaha'),
+        BottomNavigationBarItem(
+            icon: Icon(Icons.receipt_long_rounded), label: 'Transaksi'),
+        BottomNavigationBarItem(
+            icon: Icon(Icons.assessment_rounded), label: 'Laporan'),
       ],
     );
   }
