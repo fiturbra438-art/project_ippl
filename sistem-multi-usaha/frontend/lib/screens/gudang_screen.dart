@@ -6,6 +6,7 @@ import '../models/user_model.dart';
 import '../providers/auth_provider.dart';
 import '../providers/gudang_provider.dart';
 import '../providers/produk_provider.dart';
+import '../providers/usaha_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
 import '../widgets/app_navigator.dart';
@@ -405,9 +406,14 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
   }
 
   void _showKirimTransferDialog(BuildContext context) {
-    final qtyCtrl = TextEditingController(text: '10');
-    final produkList = Provider.of<ProdukProvider>(context, listen: false).daftarProduk;
-    String selectedProduk = produkList.isNotEmpty ? produkList.first.nama : 'Biji Kopi Arabika';
+    final qtyCtrl = TextEditingController();
+    final produkList = context.read<ProdukProvider>().daftarProduk;
+    final unitList = context.read<UsahaProvider>().daftarUsaha;
+    final unitId = context.read<AuthProvider>().selectedUnitId;
+    final tujuanList = unitList.where((u) => u.id != unitId).toList();
+    if (produkList.isEmpty || unitId == null || tujuanList.isEmpty) return;
+    int selectedProduk = produkList.first.id;
+    int selectedTujuan = tujuanList.first.id;
 
     showDialog(
       context: context,
@@ -418,11 +424,18 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              DropdownButtonFormField<String>(
+              DropdownButtonFormField<int>(
                 value: selectedProduk,
                 decoration: const InputDecoration(labelText: 'Pilih Produk', border: OutlineInputBorder()),
-                items: produkList.map((p) => DropdownMenuItem(value: p.nama, child: Text(p.nama))).toList(),
+                items: produkList.map((p) => DropdownMenuItem(value: p.id, child: Text(p.nama))).toList(),
                 onChanged: (val) => setState(() => selectedProduk = val!),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int>(
+                value: selectedTujuan,
+                decoration: const InputDecoration(labelText: 'Unit Tujuan', border: OutlineInputBorder()),
+                items: tujuanList.map((u) => DropdownMenuItem(value: u.id, child: Text(u.nama))).toList(),
+                onChanged: (val) => setState(() => selectedTujuan = val!),
               ),
               const SizedBox(height: 12),
               TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Jumlah Unit Dikirim', border: OutlineInputBorder())),
@@ -431,22 +444,14 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
             ElevatedButton(
-              onPressed: () {
-                Provider.of<GudangProvider>(context, listen: false).kirimTransferStok(
-                  TransferStokModel(
-                    id: DateTime.now().millisecondsSinceEpoch,
-                    unitAsalId: 1,
-                    namaUnitAsal: 'Kedai Kopi Bahagia',
-                    unitTujuanId: 2,
-                    namaUnitTujuan: 'Laundry Bersih Kilat',
-                    produkId: 1,
-                    namaProduk: selectedProduk,
-                    jumlah: int.tryParse(qtyCtrl.text) ?? 5,
-                    waktuKirim: DateTime.now(),
-                  ),
-                );
+              onPressed: () async {
+                final ok = await context.read<GudangProvider>().kirimTransferStok(TransferStokModel(
+                  id: 0, unitAsalId: unitId, namaUnitAsal: '', unitTujuanId: selectedTujuan, namaUnitTujuan: '',
+                  produkId: selectedProduk, namaProduk: '', jumlah: int.tryParse(qtyCtrl.text) ?? 0, waktuKirim: DateTime.now(),
+                ));
+                if (!ctx.mounted) return;
                 Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Permintaan transfer stok dikirim! Menunggu konfirmasi unit tujuan.')));
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? 'Transfer stok berhasil dikirim.' : (context.read<GudangProvider>().lastError ?? 'Transfer stok gagal.'))));
               },
               child: const Text('Kirim'),
             ),
@@ -457,50 +462,54 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
   }
 
   void _showCatatOpnameDialog(BuildContext context) {
-    final fisikCtrl = TextEditingController(text: '20');
+    final fisikCtrl = TextEditingController();
     final alasanCtrl = TextEditingController();
+    final unitId = context.read<AuthProvider>().selectedUnitId;
+    final products = context.read<ProdukProvider>().daftarProduk.where((p) => p.unitId == unitId).toList();
+    if (unitId == null || products.isEmpty) return;
+    int selectedProduct = products.first.id;
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => StatefulBuilder(builder: (context, setState) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Catat Stok Opname Fisik', style: TextStyle(fontWeight: FontWeight.bold)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: fisikCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Jumlah Stok Fisik Riil', border: OutlineInputBorder())),
-            const SizedBox(height: 12),
-            TextField(controller: alasanCtrl, decoration: const InputDecoration(labelText: 'Catatan Selisih (contoh: Rusak / Kadaluarsa)', border: OutlineInputBorder())),
-          ],
-        ),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          DropdownButtonFormField<int>(
+            value: selectedProduct,
+            decoration: const InputDecoration(labelText: 'Pilih Produk', border: OutlineInputBorder()),
+            items: products.map((p) => DropdownMenuItem(value: p.id, child: Text(p.nama))).toList(),
+            onChanged: (value) => setState(() => selectedProduct = value!),
+          ),
+          const SizedBox(height: 12),
+          TextField(controller: fisikCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Jumlah Stok Fisik Riil', border: OutlineInputBorder())),
+          const SizedBox(height: 12),
+          TextField(controller: alasanCtrl, decoration: const InputDecoration(labelText: 'Catatan Selisih', border: OutlineInputBorder())),
+        ]),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
-          ElevatedButton(
-            onPressed: () {
-              Provider.of<GudangProvider>(context, listen: false).catatOpname(
-                StokOpnameModel(
-                  id: DateTime.now().millisecondsSinceEpoch,
-                  unitId: 1,
-                  namaUnit: 'Kedai Kopi Bahagia',
-                  namaProduk: 'Biji Kopi Arabika 1kg',
-                  stokSistem: 24,
-                  stokFisik: int.tryParse(fisikCtrl.text) ?? 20,
-                  alasan: alasanCtrl.text.isEmpty ? 'Penyesuaian stok berkala' : alasanCtrl.text,
-                  tanggal: DateTime.now(),
-                ),
-              );
-              Navigator.pop(ctx);
-            },
-            child: const Text('Simpan Opname'),
-          ),
+          ElevatedButton(onPressed: () async {
+            final product = products.firstWhere((p) => p.id == selectedProduct);
+            final ok = await context.read<GudangProvider>().catatOpname(StokOpnameModel(
+              id: 0, unitId: unitId, namaUnit: '', productId: product.id, namaProduk: product.nama,
+              stokSistem: product.stok, stokFisik: int.tryParse(fisikCtrl.text) ?? -1,
+              alasan: alasanCtrl.text, tanggal: DateTime.now(),
+            ));
+            if (!ctx.mounted) return;
+            Navigator.pop(ctx);
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? 'Stok opname berhasil disimpan.' : (context.read<GudangProvider>().lastError ?? 'Stok opname gagal.'))));
+          }, child: const Text('Simpan Opname')),
         ],
-      ),
+      )),
     );
   }
 
   void _showCatatMutasiDialog(BuildContext context) {
-    final qtyCtrl = TextEditingController(text: '10');
+    final qtyCtrl = TextEditingController();
     final sumberCtrl = TextEditingController();
+    final products = context.read<ProdukProvider>().daftarProduk;
+    if (products.isEmpty) return;
+    int selectedProduct = products.first.id;
     String jenis = 'MASUK';
 
     showDialog(
@@ -522,6 +531,13 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
                 onChanged: (val) => setState(() => jenis = val!),
               ),
               const SizedBox(height: 12),
+              DropdownButtonFormField<int>(
+                value: selectedProduct,
+                decoration: const InputDecoration(labelText: 'Pilih Produk', border: OutlineInputBorder()),
+                items: products.map((p) => DropdownMenuItem(value: p.id, child: Text(p.nama))).toList(),
+                onChanged: (value) => setState(() => selectedProduct = value!),
+              ),
+              const SizedBox(height: 12),
               TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Jumlah Unit', border: OutlineInputBorder())),
               const SizedBox(height: 12),
               TextField(controller: sumberCtrl, decoration: const InputDecoration(labelText: 'Sumber / Pemasok / Pengguna', border: OutlineInputBorder())),
@@ -535,8 +551,8 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
                   MutasiStokModel(
                     id: DateTime.now().millisecondsSinceEpoch,
                     jenis: jenis,
-                    namaProduk: 'Biji Kopi Arabika 1kg',
-                    jumlah: int.tryParse(qtyCtrl.text) ?? 10,
+                    namaProduk: products.firstWhere((p) => p.id == selectedProduct).nama,
+                    jumlah: int.tryParse(qtyCtrl.text) ?? 0,
                     sumberTujuan: sumberCtrl.text.isEmpty ? 'Pemasok Umum' : sumberCtrl.text,
                     tanggal: DateTime.now(),
                   ),

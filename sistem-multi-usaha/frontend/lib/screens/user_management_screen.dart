@@ -22,6 +22,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<AuthProvider>().loadPengguna();
+    });
   }
 
   @override
@@ -74,6 +77,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
   Widget _buildUserTab(BuildContext context, bool isMobile) {
     final auth = context.watch<AuthProvider>();
     final usahaList = context.watch<UsahaProvider>().rawDaftarUsaha;
+    final isManager = auth.currentUser?.role == UserRole.manager;
 
     return ListView.separated(
       padding: EdgeInsets.symmetric(horizontal: isMobile ? 16 : 32, vertical: 20),
@@ -81,6 +85,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
       separatorBuilder: (_, __) => const SizedBox(height: 12),
       itemBuilder: (context, index) {
         final u = auth.penggunaList[index];
+        final canManage = u.role != UserRole.owner && !(isManager && u.role == UserRole.manager);
 
         // Format nama unit usaha yang diakses
         String aksesLabel;
@@ -159,7 +164,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
               ),
               Row(
                 children: [
-                  if (u.role != UserRole.owner) ...[
+                  if (canManage) ...[
                     IconButton(
                       tooltip: 'Atur Posisi & Penempatan Unit',
                       icon: const Icon(Icons.edit_location_alt_rounded, color: AppTheme.primaryBlue),
@@ -176,7 +181,10 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
                       Switch(
                         value: u.isAktif,
                         activeColor: AppTheme.accentGreen,
-                        onChanged: u.role == UserRole.owner ? null : (_) => auth.toggleStatusPengguna(u.id),
+                        onChanged: (!canManage || isManager) ? null : (_) async {
+                          final ok = await auth.toggleStatusPengguna(u.id);
+                          if (!ok && context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(auth.lastError ?? 'Gagal mengubah status pengguna.')));
+                        },
                       ),
                       Text(u.isAktif ? 'Aktif' : 'Nonaktif', style: TextStyle(fontSize: 11, color: u.isAktif ? AppTheme.accentGreen : AppTheme.textMuted)),
                     ],
@@ -306,11 +314,13 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-            onPressed: () {
-              context.read<AuthProvider>().hapusPengguna(u.id);
+            onPressed: () async {
+              final auth = context.read<AuthProvider>();
+              final ok = await auth.hapusPengguna(u.id);
+              if (!ctx.mounted) return;
               Navigator.pop(ctx);
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Akses untuk ${u.nama} berhasil dicabut.')),
+                SnackBar(content: Text(ok ? 'Akses untuk ${u.nama} berhasil dicabut.' : (auth.lastError ?? 'Gagal mencabut akses.'))),
               );
             },
             child: const Text('Hapus Akses'),
@@ -321,6 +331,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
   }
 
   void _showEditUserDialog(BuildContext context, UserModel user) {
+    final isManager = context.read<AuthProvider>().currentUser?.role == UserRole.manager;
     final namaCtrl = TextEditingController(text: user.nama);
     UserRole selectedRole = user.role;
     List<int> selectedUnitIds = List.from(user.unitAksesIds);
@@ -358,28 +369,30 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
                     decoration: const InputDecoration(labelText: 'Nama Karyawan', border: OutlineInputBorder()),
                   ),
                   const SizedBox(height: 14),
-                  DropdownButtonFormField<UserRole>(
-                    value: selectedRole,
-                    decoration: const InputDecoration(
-                      labelText: 'Posisi / Peran Jabatan',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.badge_rounded, color: AppTheme.primaryBlue),
+                  if (!isManager) ...[
+                    DropdownButtonFormField<UserRole>(
+                      value: selectedRole,
+                      decoration: const InputDecoration(
+                        labelText: 'Posisi / Peran Jabatan',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.badge_rounded, color: AppTheme.primaryBlue),
+                      ),
+                      items: [UserRole.manager, UserRole.kasir, UserRole.adminGudang, UserRole.auditor]
+                          .map((r) => DropdownMenuItem(value: r, child: Text(r.label)))
+                          .toList(),
+                      onChanged: (val) {
+                        if (val != null) {
+                          setState(() {
+                            selectedRole = val;
+                            if (selectedRole == UserRole.auditor) {
+                              selectedUnitIds.clear(); // Auditor bisa akses semua
+                            }
+                          });
+                        }
+                      },
                     ),
-                    items: [UserRole.manager, UserRole.kasir, UserRole.adminGudang, UserRole.auditor]
-                        .map((r) => DropdownMenuItem(value: r, child: Text(r.label)))
-                        .toList(),
-                    onChanged: (val) {
-                      if (val != null) {
-                        setState(() {
-                          selectedRole = val;
-                          if (selectedRole == UserRole.auditor) {
-                            selectedUnitIds.clear(); // Auditor bisa akses semua
-                          }
-                        });
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 18),
+                    const SizedBox(height: 18),
+                  ],
                   const Text('Pilih Unit Usaha yang Boleh Diakses:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.textPrimary)),
                   const SizedBox(height: 4),
                   const Text('Karyawan hanya bisa membuka modul, POS, dan data di cabang yang dipilih.', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
@@ -431,19 +444,13 @@ class _UserManagementScreenState extends State<UserManagementScreen> with Single
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
             ElevatedButton(
-              onPressed: () {
+              onPressed: () async {
                 if (namaCtrl.text.trim().isEmpty) return;
-                context.read<AuthProvider>().updatePenggunaAkses(
-                  id: user.id,
-                  nama: namaCtrl.text.trim(),
-                  role: selectedRole,
-                  unitAksesIds: selectedUnitIds,
-                  isAktif: isAktif,
-                );
+                final auth = context.read<AuthProvider>();
+                final ok = await auth.updatePenggunaAkses(id: user.id, nama: namaCtrl.text.trim(), role: selectedRole, unitAksesIds: selectedUnitIds, isAktif: isAktif);
+                if (!ctx.mounted) return;
                 Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Akses dan penempatan untuk ${user.nama} berhasil diperbarui.')),
-                );
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? 'Akses dan penempatan berhasil diperbarui.' : (auth.lastError ?? 'Gagal memperbarui akses.'))));
               },
               child: const Text('Simpan Perubahan'),
             ),

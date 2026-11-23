@@ -8,6 +8,7 @@ use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::auth::{accessible_unit_ids, ensure_unit_access};
 use crate::models::{Claims, PaketLangganan};
 use crate::schemas::ApiResponse;
 use crate::state::AppState;
@@ -221,6 +222,18 @@ pub async fn get_laporan_keuangan(
 ) -> impl IntoResponse {
     let owner_id = claims.owner_id;
 
+    if let Some(uid) = query.unit_id {
+        if let Err(err) = ensure_unit_access(&state, &claims, uid).await { return err; }
+    }
+    let scoped_ids = if query.unit_id.is_none() && !["owner", "auditor"].contains(&claims.role.as_str()) {
+        match accessible_unit_ids(&state, &claims).await {
+            Ok(ids) => Some(ids),
+            Err(err) => return err,
+        }
+    } else {
+        None
+    };
+
     let rows = if let Some(uid) = query.unit_id {
         sqlx::query_as::<_, (rust_decimal::Decimal, String)>(
             "SELECT t.total, t.metode_bayar 
@@ -230,6 +243,17 @@ pub async fn get_laporan_keuangan(
         )
         .bind(owner_id as i32)
         .bind(uid as i32)
+        .fetch_all(&state.db)
+        .await
+    } else if let Some(ids) = &scoped_ids {
+        sqlx::query_as::<_, (rust_decimal::Decimal, String)>(
+            "SELECT t.total, t.metode_bayar
+             FROM transactions t
+             JOIN business_units u ON t.unit_id = u.id
+             WHERE u.owner_id = $1 AND t.status = 'selesai' AND t.unit_id = ANY($2)",
+        )
+        .bind(owner_id as i32)
+        .bind(ids)
         .fetch_all(&state.db)
         .await
     } else {
@@ -254,6 +278,17 @@ pub async fn get_laporan_keuangan(
         )
         .bind(owner_id as i32)
         .bind(uid as i32)
+        .fetch_all(&state.db)
+        .await
+    } else if let Some(ids) = &scoped_ids {
+        sqlx::query_as::<_, (String, String, rust_decimal::Decimal)>(
+            "SELECT c.jenis, c.kategori, c.jumlah
+             FROM cash_flows c
+             JOIN business_units u ON u.id = c.unit_id
+             WHERE u.owner_id = $1 AND c.unit_id = ANY($2)",
+        )
+        .bind(owner_id as i32)
+        .bind(ids)
         .fetch_all(&state.db)
         .await
     } else {

@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 use axum::{
     async_trait,
     extract::{FromRequestParts, State},
@@ -103,6 +105,53 @@ pub fn require_claims(
     }
 }
 
+pub fn access_error(status: StatusCode) -> Response {
+    (status, Json(ApiResponse::<()> {
+        status: "error".to_string(),
+        message: "Akses ditolak atau validasi akses gagal.".to_string(),
+        data: None,
+    })).into_response()
+}
+
+#[allow(clippy::result_large_err)]
+pub async fn validate_claims(state: &AppState, mut claims: Claims) -> Result<Claims, Response> {
+    let account = sqlx::query_as::<_, (String, String, i64, Option<String>)>(
+        "SELECT u.email, u.role, o.id::bigint, o.tier FROM users u
+         JOIN users o ON o.id = CASE WHEN u.role = 'owner' THEN u.id ELSE u.owner_id END
+         WHERE u.id::bigint = $1 AND u.aktif = true AND o.aktif = true AND o.role = 'owner'"
+    ).bind(claims.user_id).fetch_optional(&state.db).await
+        .map_err(|_| access_error(StatusCode::SERVICE_UNAVAILABLE))?;
+    let Some((email, role, owner_id, tier)) = account else {
+        return Err(access_error(StatusCode::UNAUTHORIZED));
+    };
+    if owner_id != claims.owner_id {
+        return Err(access_error(StatusCode::UNAUTHORIZED));
+    }
+    claims.sub = email;
+    claims.role = role;
+    claims.tier = tier;
+    Ok(claims)
+}
+
+#[allow(clippy::result_large_err)]
+pub async fn ensure_unit_access(state: &AppState, claims: &Claims, unit_id: i64) -> Result<(), Response> {
+    let allowed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM business_units u WHERE u.id::bigint = $1 AND u.owner_id::bigint = $2
+         AND ($3 OR EXISTS(SELECT 1 FROM user_units uu WHERE uu.unit_id = u.id AND uu.user_id::bigint = $4)))"
+    ).bind(unit_id).bind(claims.owner_id).bind(claims.role == "owner").bind(claims.user_id)
+        .fetch_one(&state.db).await.map_err(|_| access_error(StatusCode::SERVICE_UNAVAILABLE))?;
+    if allowed { Ok(()) } else { Err(access_error(StatusCode::FORBIDDEN)) }
+}
+
+#[allow(clippy::result_large_err)]
+pub async fn accessible_unit_ids(state: &AppState, claims: &Claims) -> Result<Vec<i32>, Response> {
+    sqlx::query_scalar(
+        "SELECT u.id FROM business_units u WHERE u.owner_id::bigint = $1
+         AND ($2 OR EXISTS(SELECT 1 FROM user_units uu WHERE uu.unit_id = u.id AND uu.user_id::bigint = $3))"
+    ).bind(claims.owner_id).bind(claims.role == "owner").bind(claims.user_id)
+        .fetch_all(&state.db).await.map_err(|_| access_error(StatusCode::SERVICE_UNAVAILABLE))
+}
+
 #[async_trait]
 impl FromRequestParts<Arc<AppState>> for Claims {
     type Rejection = Response;
@@ -111,11 +160,13 @@ impl FromRequestParts<Arc<AppState>> for Claims {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        require_claims(&parts.headers, &state.jwt_secret).map_err(|err| err.into_response())
+        let claims = require_claims(&parts.headers, &state.jwt_secret).map_err(|err| err.into_response())?;
+        validate_claims(state, claims).await
     }
 }
 
 /// Otorisasi terpusat untuk endpoint administratif.
+#[allow(clippy::result_large_err)]
 pub fn ensure_roles(claims: &Claims, allowed: &[&str]) -> Result<(), Response> {
     if allowed.iter().any(|role| *role == claims.role) {
         Ok(())
@@ -134,6 +185,7 @@ pub fn ensure_roles(claims: &Claims, allowed: &[&str]) -> Result<(), Response> {
 
 /// Otorisasi terpusat berbasis header (kompatibilitas).
 #[allow(dead_code)]
+#[allow(clippy::result_large_err)]
 pub fn require_roles(
     headers: &axum::http::HeaderMap,
     secret: &str,

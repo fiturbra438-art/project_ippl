@@ -183,6 +183,7 @@ pub struct StokOpnameModel {
     pub id: i64,
     pub owner_id: i64,
     pub unit_id: i64,
+    pub product_id: i64,
     pub nama_unit: String,
     pub nama_produk: String,
     pub stok_sistem: i32,

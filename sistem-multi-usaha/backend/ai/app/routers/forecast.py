@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.schemas.ai import ApiResponse
-from app.security import Claims, get_claims
+from app.security import Claims, ensure_unit_access, get_claims
 from app.services.forecasting import (
     generate_forecast,
     generate_product_forecast,
@@ -20,6 +20,7 @@ def get_forecast(
     claims: Claims = Depends(get_claims),
     db: Session = Depends(get_db),
 ):
+    ensure_unit_access(db, claims, unit_id)
     data = generate_forecast(db, unit_id, claims.owner_id, horizon)
     if data is None:
         raise HTTPException(
@@ -40,6 +41,7 @@ def get_product_forecast(
     claims: Claims = Depends(get_claims),
     db: Session = Depends(get_db),
 ):
+    ensure_unit_access(db, claims, unit_id)
     data = generate_product_forecast(db, unit_id, claims.owner_id, horizon)
     if data is None:
         raise HTTPException(

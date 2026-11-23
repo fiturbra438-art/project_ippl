@@ -8,6 +8,7 @@ use rust_decimal::prelude::ToPrimitive;
 use serde::Deserialize;
 use std::sync::Arc;
 
+use crate::auth::ensure_unit_access;
 use crate::models::{Claims, ProdukModel};
 use crate::schemas::{AdjustStokRequest, ApiResponse, CreateProdukRequest, UpdateProdukRequest};
 use crate::state::AppState;
@@ -24,6 +25,11 @@ pub async fn list_produk(
     Query(query): Query<ProdukQuery>,
 ) -> impl IntoResponse {
     let owner_id = claims.owner_id;
+    if let Some(uid) = query.unit_id {
+        if let Err(response) = ensure_unit_access(&state, &claims, uid).await {
+            return response.into_response();
+        }
+    }
 
     let rows = if let Some(uid) = query.unit_id {
         sqlx::query_as::<_, (i32, i32, i32, String, String, rust_decimal::Decimal, rust_decimal::Decimal, i32, i32)>(
@@ -31,10 +37,13 @@ pub async fn list_produk(
              FROM products p
              JOIN inventories i ON p.id = i.product_id
              WHERE p.owner_id = $1 AND i.unit_id = $2
+               AND ($3 = 'owner' OR EXISTS (SELECT 1 FROM user_units uu WHERE uu.user_id = $4 AND uu.unit_id = i.unit_id))
              ORDER BY p.id ASC"
         )
         .bind(owner_id as i32)
         .bind(uid as i32)
+        .bind(&claims.role)
+        .bind(claims.user_id as i32)
         .fetch_all(&state.db)
         .await
     } else {
@@ -42,10 +51,13 @@ pub async fn list_produk(
             "SELECT DISTINCT ON (p.id) p.id, p.owner_id, COALESCE(i.unit_id, 1), p.nama, p.sku, p.harga_beli, p.harga_jual, COALESCE(i.qty, 0), COALESCE(i.min_stock, 5)
              FROM products p
              LEFT JOIN inventories i ON p.id = i.product_id
-             WHERE p.owner_id = $1
-             ORDER BY p.id ASC, i.unit_id ASC"
+              WHERE p.owner_id = $1
+                AND ($2 = 'owner' OR EXISTS (SELECT 1 FROM user_units uu WHERE uu.user_id = $3 AND uu.unit_id = i.unit_id))
+              ORDER BY p.id ASC, i.unit_id ASC"
         )
         .bind(owner_id as i32)
+        .bind(&claims.role)
+        .bind(claims.user_id as i32)
         .fetch_all(&state.db)
         .await
     };
@@ -88,14 +100,19 @@ pub async fn list_low_stock(
     claims: Claims,
 ) -> impl IntoResponse {
     let owner_id = claims.owner_id;
+    let unit_ids = match crate::auth::accessible_unit_ids(&state, &claims).await {
+        Ok(ids) => ids,
+        Err(response) => return response.into_response(),
+    };
 
     let rows = sqlx::query_as::<_, (i32, i32, String, String, rust_decimal::Decimal, rust_decimal::Decimal, i32, i32)>(
         "SELECT v.product_id, v.unit_id, v.nama_produk, v.sku, v.harga_beli, v.harga_jual, v.stok_saat_ini, v.batas_minimum
          FROM view_produk_stok_kritis v
          JOIN business_units b ON v.unit_id = b.id
-         WHERE b.owner_id = $1"
+          WHERE b.owner_id = $1 AND v.unit_id = ANY($2)"
     )
     .bind(owner_id as i32)
+    .bind(&unit_ids)
     .fetch_all(&state.db)
     .await;
 
@@ -138,13 +155,17 @@ pub async fn get_produk_detail(
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
     let row = sqlx::query_as::<_, (i32, i32, i32, String, String, rust_decimal::Decimal, rust_decimal::Decimal, i32, i32)>(
-        "SELECT p.id, p.owner_id, COALESCE(i.unit_id, 1), p.nama, p.sku, p.harga_beli, p.harga_jual, COALESCE(i.qty, 0), COALESCE(i.min_stock, 5)
+        "SELECT p.id, p.owner_id, i.unit_id, p.nama, p.sku, p.harga_beli, p.harga_jual, i.qty, i.min_stock
          FROM products p
-         LEFT JOIN inventories i ON p.id = i.product_id
-          WHERE p.id = $1 AND p.owner_id = $2"
+         JOIN inventories i ON p.id = i.product_id
+          WHERE p.id = $1 AND p.owner_id = $2
+            AND ($3 = 'owner' OR EXISTS (SELECT 1 FROM user_units uu WHERE uu.user_id = $4 AND uu.unit_id = i.unit_id))
+          ORDER BY i.unit_id ASC LIMIT 1"
     )
     .bind(id as i32)
     .bind(claims.owner_id as i32)
+    .bind(&claims.role)
+    .bind(claims.user_id as i32)
     .fetch_optional(&state.db)
     .await;
 
@@ -188,6 +209,12 @@ pub async fn create_produk(
 ) -> impl IntoResponse {
     let owner_id = claims.owner_id;
     let aktor_role = claims.role.as_str();
+    if !["owner", "manager"].contains(&aktor_role) {
+        return (StatusCode::FORBIDDEN, Json(ApiResponse::<ProdukModel> { status: "error".to_string(), message: "Role tidak boleh mengelola produk.".to_string(), data: None })).into_response();
+    }
+    if let Err(response) = ensure_unit_access(&state, &claims, payload.unit_id).await {
+        return response.into_response();
+    }
 
     let unit_valid: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM business_units WHERE id = $1 AND owner_id = $2)",
@@ -248,7 +275,10 @@ pub async fn create_produk(
 
     let min_stock = payload.min_stok.unwrap_or(5);
 
-    // 1. Insert ke PostgreSQL `products`
+    let mut tx = match state.db.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<ProdukModel> { status: "error".to_string(), message: format!("Gagal memulai transaksi: {}", e), data: None })).into_response(),
+    };
     let prod_row: Result<(i32,), sqlx::Error> = sqlx::query_as(
         "INSERT INTO products (owner_id, sku, nama, kategori, harga_beli, harga_jual, satuan, created_at)
          VALUES ($1, $2, $3, 'Umum', $4, $5, 'pcs', now())
@@ -259,8 +289,8 @@ pub async fn create_produk(
     .bind(&payload.nama)
     .bind(rust_decimal::Decimal::from_f64_retain(payload.harga_beli).unwrap_or_default())
     .bind(rust_decimal::Decimal::from_f64_retain(payload.harga_jual).unwrap_or_default())
-    .fetch_one(&state.db)
-    .await;
+.fetch_one(&mut *tx)
+        .await;
 
     let prod_id = match prod_row {
         Ok(r) => r.0,
@@ -277,8 +307,7 @@ pub async fn create_produk(
         }
     };
 
-    // 2. Insert ke PostgreSQL `inventories`
-    let _ = sqlx::query(
+    let inventory_result = sqlx::query(
         "INSERT INTO inventories (unit_id, product_id, qty, min_stock, created_at)
          VALUES ($1, $2, $3, $4, now())",
     )
@@ -286,8 +315,14 @@ pub async fn create_produk(
     .bind(prod_id)
     .bind(payload.stok)
     .bind(min_stock)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await;
+    if let Err(e) = inventory_result {
+        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<ProdukModel> { status: "error".to_string(), message: format!("Gagal menyimpan inventaris: {}", e), data: None })).into_response();
+    }
+    if let Err(e) = tx.commit().await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<ProdukModel> { status: "error".to_string(), message: format!("Gagal menyelesaikan transaksi: {}", e), data: None })).into_response();
+    }
 
     let new_produk = ProdukModel {
         id: prod_id as i64,
@@ -321,11 +356,16 @@ pub async fn update_produk(
     Json(payload): Json<UpdateProdukRequest>,
 ) -> impl IntoResponse {
     let aktor_role = claims.role.as_str();
+    if !["owner", "manager"].contains(&aktor_role) {
+        return (StatusCode::FORBIDDEN, Json(ApiResponse::<ProdukModel> { status: "error".to_string(), message: "Role tidak boleh mengelola produk.".to_string(), data: None })).into_response();
+    }
 
     let product_valid: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM products WHERE id = $1 AND owner_id = $2)")
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM products p JOIN inventories i ON i.product_id = p.id WHERE p.id = $1 AND p.owner_id = $2 AND ($3 = 'owner' OR EXISTS (SELECT 1 FROM user_units uu WHERE uu.user_id = $4 AND uu.unit_id = i.unit_id)))")
             .bind(id as i32)
             .bind(claims.owner_id as i32)
+            .bind(&claims.role)
+            .bind(claims.user_id as i32)
             .fetch_one(&state.db)
             .await
             .unwrap_or(false);
@@ -426,11 +466,13 @@ pub async fn adjust_stok(
             .into_response();
     }
     let res = sqlx::query(
-        "UPDATE inventories SET qty = GREATEST(0, qty + $1) WHERE product_id = $2 AND unit_id IN (SELECT id FROM business_units WHERE owner_id = $3)"
+        "UPDATE inventories SET qty = GREATEST(0, qty + $1) WHERE product_id = $2 AND unit_id IN (SELECT u.id FROM business_units u WHERE u.owner_id = $3 AND ($4 = 'owner' OR EXISTS (SELECT 1 FROM user_units uu WHERE uu.user_id = $5 AND uu.unit_id = u.id)))"
     )
     .bind(payload.penambahan)
     .bind(id as i32)
     .bind(claims.owner_id as i32)
+    .bind(&claims.role)
+    .bind(claims.user_id as i32)
     .execute(&state.db)
     .await;
 

@@ -56,7 +56,7 @@ class ApiService {
       try {
         final decoded = jsonDecode(res.body);
         if (decoded is Map<String, dynamic>) {
-          if (!isSuccessStatus && decoded['status'] == null) {
+          if (!isSuccessStatus) {
             decoded['status'] = 'error';
           }
           decoded['statusCode'] = res.statusCode;
@@ -142,6 +142,21 @@ class ApiService {
     }
   }
 
+  static Future<Map<String, dynamic>?> put(
+      String endpoint, Map<String, dynamic> body) async {
+    try {
+      final res = await http
+          .put(Uri.parse('$baseUrl$endpoint'),
+              headers: headers, body: jsonEncode(body))
+          .timeout(defaultTimeout);
+      return _parseOrError(res, endpoint);
+    } on TimeoutException {
+      return {'status': 'error', 'message': 'Waktu koneksi habis.'};
+    } catch (e) {
+      return {'status': 'error', 'message': 'Gagal terhubung ke server: $e'};
+    }
+  }
+
   // Generic PATCH
   static Future<Map<String, dynamic>?> patch(String endpoint,
       [Map<String, dynamic>? body]) async {
@@ -178,24 +193,16 @@ class ApiService {
   }
 
   // Generic DELETE
-  static Future<bool> delete(String endpoint) async {
+  static Future<Map<String, dynamic>?> delete(String endpoint) async {
     try {
       final res = await http
           .delete(Uri.parse('$baseUrl$endpoint'), headers: headers)
           .timeout(defaultTimeout);
-      if (res.statusCode >= 200 && res.statusCode < 300) {
-        return true;
-      }
-      debugPrint(
-          'API DELETE failed on $endpoint with status ${res.statusCode}');
-      return false;
+      return _parseOrError(res, endpoint);
     } on TimeoutException {
-      debugPrint(
-          'API DELETE timeout on $endpoint (${defaultTimeout.inSeconds}s)');
-      return false;
+      return {'status': 'error', 'message': 'Waktu koneksi habis.'};
     } catch (e) {
-      debugPrint('API DELETE error on $endpoint: $e');
-      return false;
+      return {'status': 'error', 'message': 'Gagal terhubung ke server: $e'};
     }
   }
 }

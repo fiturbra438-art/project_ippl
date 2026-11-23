@@ -32,6 +32,7 @@ class StokOpnameModel {
   final int id;
   final int unitId;
   final String namaUnit;
+  final int productId;
   final String namaProduk;
   final int stokSistem;
   final int stokFisik;
@@ -42,6 +43,7 @@ class StokOpnameModel {
     required this.id,
     required this.unitId,
     required this.namaUnit,
+    required this.productId,
     required this.namaProduk,
     required this.stokSistem,
     required this.stokFisik,

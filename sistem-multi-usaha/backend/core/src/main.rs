@@ -1,3 +1,5 @@
+#![allow(clippy::redundant_pattern_matching, clippy::type_complexity)]
+
 mod ai;
 mod ai_gateway;
 mod auth;

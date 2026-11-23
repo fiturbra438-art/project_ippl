@@ -3,7 +3,21 @@ import '../models/user_model.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 
+typedef ApiGet = Future<Map<String, dynamic>?> Function(String endpoint);
+typedef ApiPut = Future<Map<String, dynamic>?> Function(
+    String endpoint, Map<String, dynamic> body);
+typedef ApiDelete = Future<Map<String, dynamic>?> Function(String endpoint);
+
 class AuthProvider extends ChangeNotifier {
+  AuthProvider({ApiGet? get, ApiPut? put, ApiDelete? delete})
+      : _get = get ?? ApiService.get,
+        _put = put ?? ApiService.put,
+        _delete = delete ?? ApiService.delete;
+
+  final ApiGet _get;
+  final ApiPut _put;
+  final ApiDelete _delete;
+
   UserModel? _currentUser;
 
   int? _selectedUnitId; // null = semua unit (konsolidasi owner)
@@ -281,57 +295,75 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void updatePenggunaAkses({
-    required int id,
-    required String nama,
-    required UserRole role,
-    required List<int> unitAksesIds,
-    required bool isAktif,
-  }) {
-    final idx = _penggunaList.indexWhere((u) => u.id == id);
-    if (idx != -1) {
-      _penggunaList[idx] = UserModel(
-        id: id,
-        nama: nama,
-        email: _penggunaList[idx].email,
-        role: role,
-        unitAksesIds: unitAksesIds,
-        isAktif: isAktif,
-        is2FAAktif: _penggunaList[idx].is2FAAktif,
-      );
-      addAuditLog('UPDATE_HAK_AKSES', 'PENGGUNA', _penggunaList[idx].email, 'Owner memperbarui posisi menjadi ${role.label} & penempatan unit $unitAksesIds');
+  Future<void> loadPengguna() async {
+    final res = await _get('/karyawan');
+    if (res?['status'] != 'success' || res?['data'] is! List) {
+      _lastError = res?['message'] as String? ?? 'Gagal memuat pengguna.';
       notifyListeners();
-    }
-  }
-
-  void hapusPengguna(int id) {
-    final idx = _penggunaList.indexWhere((u) => u.id == id);
-    if (idx == -1) {
-      debugPrint('AuthProvider.hapusPengguna: pengguna dengan id $id tidak ditemukan.');
       return;
     }
-    final user = _penggunaList[idx];
-    _penggunaList.removeAt(idx);
-    addAuditLog('HAPUS_PENGGUNA', 'PENGGUNA', user.email, 'Owner mencabut seluruh akses akun');
+    _penggunaList
+      ..clear()
+      ..addAll((res!['data'] as List).map((raw) {
+        final data = Map<String, dynamic>.from(raw as Map);
+        return UserModel(
+          id: (data['id'] as num).toInt(),
+          nama: data['nama'] as String? ?? '',
+          email: data['email'] as String? ?? '',
+          role: matchRoleFromString(data['peran'] as String? ?? 'kasir'),
+          unitAksesIds: (data['unit_akses_ids'] as List? ?? []).map((e) => (e as num).toInt()).toList(),
+          isAktif: data['is_active'] as bool? ?? true,
+        );
+      }));
     notifyListeners();
   }
 
-  void toggleStatusPengguna(int id) {
+  Future<bool> updatePenggunaAkses({
+    required int id, required String nama, required UserRole role,
+    required List<int> unitAksesIds, required bool isAktif,
+  }) async {
     final idx = _penggunaList.indexWhere((u) => u.id == id);
-    if (idx != -1) {
-      final u = _penggunaList[idx];
-      _penggunaList[idx] = UserModel(
-        id: u.id,
-        nama: u.nama,
-        email: u.email,
-        role: u.role,
-        unitAksesIds: u.unitAksesIds,
-        isAktif: !u.isAktif,
-        is2FAAktif: u.is2FAAktif,
-      );
-      addAuditLog('UBAH_STATUS_PENGGUNA', 'PENGGUNA', u.email, 'Status aktif diubah menjadi ${!u.isAktif}');
-      notifyListeners();
+    if (idx == -1) return false;
+    final isManager = _currentUser?.role == UserRole.manager;
+    final payload = <String, dynamic>{
+      'nama': nama,
+      'unit_akses_ids': unitAksesIds,
+    };
+    if (!isManager) {
+      payload['peran'] = role.name == 'adminGudang' ? 'admin_gudang' : role.name;
+      payload['is_active'] = isAktif;
     }
+    final res = await _put('/karyawan/$id', payload);
+    if (res?['status'] != 'success') { _lastError = res?['message'] as String? ?? 'Gagal memperbarui pengguna.'; notifyListeners(); return false; }
+    final old = _penggunaList[idx];
+    _penggunaList[idx] = UserModel(
+      id: id,
+      nama: nama,
+      email: old.email,
+      role: isManager ? old.role : role,
+      unitAksesIds: unitAksesIds,
+      isAktif: isManager ? old.isAktif : isAktif,
+      is2FAAktif: old.is2FAAktif,
+    );
+    notifyListeners();
+    return true;
+  }
+
+  Future<bool> hapusPengguna(int id) async {
+    final idx = _penggunaList.indexWhere((u) => u.id == id);
+    if (idx == -1) return false;
+    final res = await _delete('/karyawan/$id');
+    if (res?['status'] != 'success') { _lastError = res?['message'] as String? ?? 'Gagal menghapus pengguna.'; notifyListeners(); return false; }
+    _penggunaList.removeAt(idx);
+    notifyListeners();
+    return true;
+  }
+
+  Future<bool> toggleStatusPengguna(int id) async {
+    final idx = _penggunaList.indexWhere((u) => u.id == id);
+    if (idx == -1) return false;
+    final u = _penggunaList[idx];
+    return updatePenggunaAkses(id: id, nama: u.nama, role: u.role, unitAksesIds: u.unitAksesIds, isAktif: !u.isAktif);
   }
 
   void addAuditLog(String aksi, String modul, String target, String detail) {

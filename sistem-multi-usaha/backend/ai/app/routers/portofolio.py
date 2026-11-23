@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.schemas.ai import ApiResponse, WhatIfRequest
-from app.security import Claims, get_claims
+from app.security import Claims, ensure_owner, ensure_unit_access, get_claims
 from app.services.portofolio import generate_portfolio, simulate_what_if
 
 router = APIRouter()
@@ -14,6 +14,7 @@ def get_portfolio(
     claims: Claims = Depends(get_claims),
     db: Session = Depends(get_db),
 ):
+    ensure_owner(claims)
     data = generate_portfolio(db, claims.owner_id)
     return ApiResponse(
         status="success",
@@ -28,6 +29,8 @@ def what_if(
     claims: Claims = Depends(get_claims),
     db: Session = Depends(get_db),
 ):
+    ensure_unit_access(db, claims, payload.unit_sumber_id)
+    ensure_unit_access(db, claims, payload.unit_tujuan_id)
     data = simulate_what_if(
         db,
         claims.owner_id,

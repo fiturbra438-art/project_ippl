@@ -53,8 +53,6 @@ class PosProvider extends ChangeNotifier {
   ModeOperasiKasir _modeOperasi = ModeOperasiKasir.fleksibel;
   String _namaPelanggan = '';
   String _catatanTransaksi = '';
-  bool _isOfflineMode = false;
-  final List<Map<String, dynamic>> _offlinePayloads = [];
   int _activeUnitId = 0;
   String _activeUnitNama = '';
   String? _lastError;
@@ -79,8 +77,6 @@ class PosProvider extends ChangeNotifier {
   ModeOperasiKasir get modeOperasi => _modeOperasi;
   String get namaPelanggan => _namaPelanggan;
   String get catatanTransaksi => _catatanTransaksi;
-  bool get isOfflineMode => _isOfflineMode;
-  int get offlineQueueCount => _offlinePayloads.length;
   int get activeUnitId => _activeUnitId;
   String get activeUnitNama => _activeUnitNama;
   int? get activeShiftId => _activeShiftId;
@@ -330,12 +326,6 @@ class PosProvider extends ChangeNotifier {
       'diskon_nominal': nominalDiskon,
     };
 
-    if (_isOfflineMode) {
-      _offlinePayloads.add(payload);
-      checkoutBerhasil();
-      return true;
-    }
-
     try {
       final res = await ApiService.post('/pos/checkout', payload);
 
@@ -353,25 +343,6 @@ class PosProvider extends ChangeNotifier {
     return false;
   }
 
-  Future<void> _syncOfflinePayloads() async {
-    if (_offlinePayloads.isEmpty) return;
-    final pending = List<Map<String, dynamic>>.from(_offlinePayloads);
-    _offlinePayloads.clear();
-
-    for (final payload in pending) {
-      try {
-        final res = await ApiService.post('/pos/checkout', payload);
-        if (res == null || res['status'] != 'success') {
-          _offlinePayloads.add(payload);
-        }
-      } catch (e) {
-        debugPrint('PosProvider._syncOfflinePayloads error: $e');
-        _offlinePayloads.add(payload);
-      }
-    }
-    notifyListeners();
-  }
-
   void setActiveUnit(int unitId, String unitNama) {
     if (_activeUnitId != unitId) {
       _activeUnitId = unitId;
@@ -385,14 +356,6 @@ class PosProvider extends ChangeNotifier {
   double get subtotal => _keranjang.fold(0, (sum, item) => sum + item.subtotal);
   double get nominalDiskon => (subtotal * _diskonPersen) / 100;
   double get grandTotal => subtotal - nominalDiskon;
-
-  void toggleOfflineMode() {
-    _isOfflineMode = !_isOfflineMode;
-    if (!_isOfflineMode && _offlinePayloads.isNotEmpty) {
-      _syncOfflinePayloads();
-    }
-    notifyListeners();
-  }
 
   void tambahKeKeranjang(ProdukModel produk, {ItemType tipe = ItemType.barang, int durasi = 1, String unitDurasi = 'jam'}) {
     final cartItemId = 'prod_${produk.id}_${tipe.name}';

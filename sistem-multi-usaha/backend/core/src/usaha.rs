@@ -8,6 +8,7 @@ use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use std::sync::Arc;
 
+use crate::auth::ensure_unit_access;
 use crate::models::{Claims, PaketLangganan, UsahaModel};
 use crate::schemas::{ApiResponse, CreateUsahaRequest, UpdateUsahaRequest};
 use crate::state::AppState;
@@ -61,7 +62,7 @@ pub async fn list_usaha(
     let owner_id = claims.owner_id as i32;
     let role = claims.role.as_str();
 
-    let rows: Vec<UsahaRow> = if role == "owner" || role == "auditor" {
+    let rows: Vec<UsahaRow> = if role == "owner" {
         sqlx::query_as(
             "SELECT id, owner_id, nama, jenis_usaha, lokasi, kategori_portofolio, status, has_pos,
                     pendapatan_bulan_ini, pengeluaran_bulan_ini, pertumbuhan_persen
@@ -79,10 +80,7 @@ pub async fn list_usaha(
                     u.pendapatan_bulan_ini, u.pengeluaran_bulan_ini, u.pertumbuhan_persen
              FROM business_units u
              WHERE u.owner_id = $1
-               AND (
-                   NOT EXISTS (SELECT 1 FROM user_units WHERE user_id = $2)
-                   OR EXISTS (SELECT 1 FROM user_units uu WHERE uu.user_id = $2 AND uu.unit_id = u.id)
-               )
+               AND EXISTS (SELECT 1 FROM user_units uu WHERE uu.user_id = $2 AND uu.unit_id = u.id)
              ORDER BY u.id ASC",
         )
         .bind(owner_id)
@@ -111,6 +109,9 @@ pub async fn get_usaha_detail(
     claims: Claims,
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
+    if claims.role != "owner" {
+        if let Err(err) = ensure_unit_access(&state, &claims, id).await { return err; }
+    }
     let row = sqlx::query_as::<_, UsahaRow>(
         "SELECT id, owner_id, nama, jenis_usaha, lokasi, kategori_portofolio, status, has_pos,
                 pendapatan_bulan_ini, pengeluaran_bulan_ini, pertumbuhan_persen
@@ -312,9 +313,10 @@ pub async fn update_usaha(
             .into_response();
     }
 
+    if let Err(err) = ensure_unit_access(&state, &claims, id).await { return err; }
     let existing = sqlx::query_as::<_, UsahaRow>(
         "SELECT id, owner_id, nama, jenis_usaha, lokasi, kategori_portofolio, status, has_pos,
-                pendapatan_bulan_ini, pengeluaran_bulan_ini, pertumbuhan_persen
+         pendapatan_bulan_ini, pengeluaran_bulan_ini, pertumbuhan_persen
          FROM business_units
          WHERE id = $1 AND owner_id = $2",
     )
@@ -404,6 +406,7 @@ pub async fn toggle_pos(
             .into_response();
     }
 
+    if let Err(err) = ensure_unit_access(&state, &claims, id).await { return err; }
     let updated = sqlx::query_as::<_, UsahaRow>(
         "UPDATE business_units
          SET has_pos = NOT COALESCE(has_pos, true)

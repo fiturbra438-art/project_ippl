@@ -8,6 +8,7 @@ use chrono::Local;
 use serde::Deserialize;
 use std::sync::Arc;
 
+use crate::auth::{accessible_unit_ids, ensure_unit_access};
 use crate::models::{
     Claims, JenisTransaksi, RentalServiceOrderModel, ShiftKasirModel, StatusShift, TransaksiModel,
 };
@@ -30,6 +31,8 @@ pub async fn get_shift_status(
     Path(unit_id): Path<i64>,
 ) -> impl IntoResponse {
     use rust_decimal::prelude::ToPrimitive;
+
+    if let Err(err) = ensure_unit_access(&state, &claims, unit_id).await { return err; }
 
     // Pastikan unit usaha yang diminta memang milik tenant pengguna.
     let unit_valid: bool = sqlx::query_scalar(
@@ -127,6 +130,8 @@ pub async fn buka_shift(
         )
             .into_response();
     }
+
+    if let Err(err) = ensure_unit_access(&state, &claims, payload.unit_id).await { return err; }
 
     // Pastikan unit usaha target milik tenant pengguna (mencegah buka shift lintas tenant).
     let unit_valid: bool = sqlx::query_scalar(
@@ -236,14 +241,23 @@ pub async fn tutup_shift(
     claims: Claims,
     Json(payload): Json<TutupShiftRequest>,
 ) -> impl IntoResponse {
-    let shift_valid: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM cashier_shifts s JOIN business_units u ON u.id = s.unit_id WHERE s.id = $1 AND u.owner_id = $2)"
+    if let Err(response) = crate::auth::ensure_roles(&claims, &["owner", "manager", "kasir"]) {
+        return response.into_response();
+    }
+    let shift_unit: Option<i64> = sqlx::query_scalar(
+        "SELECT s.unit_id::bigint FROM cashier_shifts s JOIN business_units u ON u.id = s.unit_id WHERE s.id = $1 AND u.owner_id = $2"
     )
     .bind(payload.shift_id as i32)
     .bind(claims.owner_id as i32)
-    .fetch_one(&state.db)
+    .fetch_optional(&state.db)
     .await
-    .unwrap_or(false);
+    .unwrap_or(None);
+    let shift_valid = shift_unit.is_some();
+    if let Some(unit_id) = shift_unit {
+        if let Err(err) = ensure_unit_access(&state, &claims, unit_id).await {
+            return err;
+        }
+    }
     if !shift_valid {
         return (
             StatusCode::FORBIDDEN,
@@ -336,6 +350,8 @@ pub async fn checkout_pos(
     let owner_id = claims.owner_id;
     let user_id = claims.user_id;
     let _kasir_nama = claims.sub.clone();
+
+    if let Err(err) = ensure_unit_access(&state, &claims, payload.unit_id).await { return err; }
 
     // Verifikasi bahwa unit_id milik owner_id terkait
     let unit_valid: bool = sqlx::query_scalar(
@@ -656,6 +672,18 @@ pub async fn list_transaksi(
 ) -> impl IntoResponse {
     let owner_id = claims.owner_id;
 
+    if let Some(uid) = query.unit_id {
+        if let Err(err) = ensure_unit_access(&state, &claims, uid).await { return err; }
+    }
+    let scoped_ids = if query.unit_id.is_none() && !["owner", "auditor"].contains(&claims.role.as_str()) {
+        match accessible_unit_ids(&state, &claims).await {
+            Ok(ids) => Some(ids),
+            Err(err) => return err,
+        }
+    } else {
+        None
+    };
+
     // Ambil data transaksi langsung dari PostgreSQL
     let rows = if let Some(uid) = query.unit_id {
         sqlx::query_as::<
@@ -679,6 +707,30 @@ pub async fn list_transaksi(
         )
         .bind(owner_id as i32)
         .bind(uid as i32)
+        .fetch_all(&state.db)
+        .await
+    } else if let Some(ids) = &scoped_ids {
+        sqlx::query_as::<
+            _,
+            (
+                i32,
+                i32,
+                i32,
+                String,
+                chrono::NaiveDateTime,
+                rust_decimal::Decimal,
+                String,
+                String,
+            ),
+        >(
+            "SELECT t.id, u.owner_id, t.unit_id, u.nama AS nama_unit, t.tanggal, t.total, t.metode_bayar, t.status
+             FROM transactions t
+             JOIN business_units u ON u.id = t.unit_id
+             WHERE u.owner_id = $1 AND t.unit_id = ANY($2)
+             ORDER BY t.id DESC",
+        )
+        .bind(owner_id as i32)
+        .bind(ids)
         .fetch_all(&state.db)
         .await
     } else {
@@ -744,6 +796,18 @@ pub async fn list_transaksi(
         )
         .bind(owner_id as i32)
         .bind(uid as i32)
+        .fetch_all(&state.db)
+        .await
+    } else if let Some(ids) = &scoped_ids {
+        sqlx::query_as::<_, (i32, i32, String, chrono::NaiveDateTime, String, String, rust_decimal::Decimal)>(
+            "SELECT c.id, c.unit_id, u.nama, c.tanggal::timestamp, c.jenis, c.kategori, c.jumlah
+             FROM cash_flows c
+             JOIN business_units u ON u.id = c.unit_id
+             WHERE u.owner_id = $1 AND c.unit_id = ANY($2)
+             ORDER BY c.id DESC",
+        )
+        .bind(owner_id as i32)
+        .bind(ids)
         .fetch_all(&state.db)
         .await
     } else {
@@ -856,6 +920,8 @@ pub async fn create_transaksi_manual(
         )
             .into_response();
     }
+
+    if let Err(err) = ensure_unit_access(&state, &claims, payload.unit_id).await { return err; }
 
     // Validasi kepemilikan unit & ambil namanya langsung dari database.
     let nama_unit: Option<String> = sqlx::query_scalar(
@@ -1044,6 +1110,18 @@ pub async fn list_active_orders(
         notes: Option<String>,
     }
 
+    if let Some(uid) = query.unit_id {
+        if let Err(err) = ensure_unit_access(&state, &claims, uid).await { return err; }
+    }
+    let scoped_ids = if query.unit_id.is_none() && !["owner", "auditor"].contains(&claims.role.as_str()) {
+        match accessible_unit_ids(&state, &claims).await {
+            Ok(ids) => Some(ids),
+            Err(err) => return err,
+        }
+    } else {
+        None
+    };
+
     // Ambil order rental & jasa yang belum selesai dari PostgreSQL
     let rows = if let Some(uid) = query.unit_id {
         sqlx::query_as::<_, OrderDbRow>(
@@ -1059,6 +1137,22 @@ pub async fn list_active_orders(
         )
         .bind(owner_id as i32)
         .bind(uid as i32)
+        .fetch_all(&state.db)
+        .await
+    } else if let Some(ids) = &scoped_ids {
+        sqlx::query_as::<_, OrderDbRow>(
+            "SELECT o.id, o.trx_id, o.unit_id, o.product_id, o.item_name, o.order_type,
+                    o.customer_name, o.start_time, o.expected_end_time, o.actual_end_time,
+                    o.duration, o.duration_unit, o.qty, o.status, o.assigned_staff,
+                    o.deposit_amount, o.penalty_fee, o.notes
+             FROM rental_service_orders o
+             JOIN business_units u ON u.id = o.unit_id
+             WHERE u.owner_id = $1 AND o.unit_id = ANY($2)
+               AND o.status NOT IN ('returned', 'completed', 'cancelled')
+             ORDER BY o.expected_end_time ASC",
+        )
+        .bind(owner_id as i32)
+        .bind(ids)
         .fetch_all(&state.db)
         .await
     } else {
@@ -1159,6 +1253,8 @@ pub async fn return_rental(
         )
             .into_response();
     };
+
+    if let Err(err) = ensure_unit_access(&state, &claims, unit_id as i64).await { return err; }
 
     // Cegah pengembalian ganda / manipulasi status order yang sudah selesai
     if !["active", "overdue"].contains(&status.as_str()) {
@@ -1345,6 +1441,19 @@ pub async fn update_service_status(
     Json(payload): Json<UpdateServiceStatusRequest>,
 ) -> impl IntoResponse {
     let owner_id = claims.owner_id;
+
+    let order_unit: Option<i64> = sqlx::query_scalar(
+        "SELECT o.unit_id::bigint FROM rental_service_orders o JOIN business_units u ON u.id = o.unit_id
+         WHERE o.id = $1 AND u.owner_id = $2 AND o.order_type = 'service'"
+    ).bind(payload.order_id).bind(owner_id).fetch_optional(&state.db).await.unwrap_or(None);
+    let Some(order_unit) = order_unit else {
+        return (StatusCode::NOT_FOUND, Json(ApiResponse::<()> {
+            status: "error".to_string(),
+            message: "Order layanan jasa tidak ditemukan.".to_string(),
+            data: None,
+        })).into_response();
+    };
+    if let Err(err) = ensure_unit_access(&state, &claims, order_unit).await { return err; }
 
     let valid_status = ["queued", "in_progress", "ready", "completed", "cancelled"];
     if !valid_status.contains(&payload.status.as_str()) {

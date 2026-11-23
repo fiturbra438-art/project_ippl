@@ -227,7 +227,7 @@ pub struct UpdateStatusPermintaanRequest {
 #[derive(Debug, Deserialize)]
 pub struct CreateStokOpnameRequest {
     pub unit_id: i64,
-    pub nama_produk: String,
+    pub product_id: i64,
     pub stok_fisik: i32,
     pub alasan: String,
 }

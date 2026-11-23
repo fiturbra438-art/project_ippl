@@ -109,7 +109,8 @@ class UsahaProvider extends ChangeNotifier {
   Future<void> hapusUsaha(int id) async {
     _lastError = null;
     try {
-      final ok = await ApiService.delete('/usaha/$id');
+      final res = await ApiService.delete('/usaha/$id');
+      final ok = res != null && res['status'] == 'success';
       if (ok) {
         _daftarUsaha.removeWhere((item) => item.id == id);
         notifyListeners();

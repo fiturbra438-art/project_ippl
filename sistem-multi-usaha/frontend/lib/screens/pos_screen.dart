@@ -110,35 +110,6 @@ class _PosScreenState extends State<PosScreen> {
                 ),
               ),
             ),
-            const SizedBox(width: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: pos.isOfflineMode ? const Color(0xFFFEF2F2) : AppTheme.lightGreenBg,
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: pos.isOfflineMode ? const Color(0xFFFECACA) : const Color(0xFFA7F3D0)),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    pos.isOfflineMode ? Icons.cloud_off_rounded : Icons.cloud_done_rounded,
-                    size: 14,
-                    color: pos.isOfflineMode ? const Color(0xFFDC2626) : AppTheme.accentGreen,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    pos.isOfflineMode
-                        ? 'Mode Offline (${pos.offlineQueueCount} tertunda)'
-                        : 'Online (Tersinkron)',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      color: pos.isOfflineMode ? const Color(0xFFDC2626) : AppTheme.accentGreen,
-                    ),
-                  ),
-                ],
-              ),
-            ),
           ],
         ),
         actions: [
@@ -214,14 +185,7 @@ class _PosScreenState extends State<PosScreen> {
             icon: const Icon(Icons.pie_chart_outline_rounded, color: AppTheme.primaryBlue),
             onPressed: () => _showKasirDashboardModal(context),
           ),
-          IconButton(
-            tooltip: 'Simulasi Putus/Sambung Internet',
-            icon: Icon(
-              pos.isOfflineMode ? Icons.wifi_off_rounded : Icons.wifi_rounded,
-              color: pos.isOfflineMode ? const Color(0xFFDC2626) : AppTheme.primaryBlue,
-            ),
-            onPressed: () => pos.toggleOfflineMode(),
-          ),
+
           ElevatedButton.icon(
             onPressed: () => _showTutupShiftDialog(context),
             icon: const Icon(Icons.lock_clock_rounded, size: 16),
@@ -815,6 +779,7 @@ class _PosScreenState extends State<PosScreen> {
         actions: [
           OutlinedButton.icon(
             onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
               final ok = await pos.checkoutAPI(
                 pos.activeUnitId,
                 pos.metodeBayar.name.toUpperCase(),
@@ -822,10 +787,10 @@ class _PosScreenState extends State<PosScreen> {
               );
               if (ctx.mounted) Navigator.pop(ctx);
               if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
+                messenger.showSnackBar(
                   SnackBar(
-                    backgroundColor: ok ? AppTheme.accentGreen : AppTheme.primaryBlue,
-                    content: Text(ok ? 'Transaksi berhasil dicatat ke PostgreSQL & struk digital dikirim via WhatsApp' : 'Transaksi diproses secara offline'),
+                    backgroundColor: ok ? AppTheme.accentGreen : const Color(0xFFDC2626),
+                    content: Text(ok ? 'Transaksi berhasil dicatat ke PostgreSQL & struk digital dikirim via WhatsApp' : (pos.lastError ?? 'Gagal memproses transaksi.')),
                   ),
                 );
               }
@@ -835,6 +800,7 @@ class _PosScreenState extends State<PosScreen> {
           ),
           ElevatedButton.icon(
             onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
               final ok = await pos.checkoutAPI(
                 pos.activeUnitId,
                 pos.metodeBayar.name.toUpperCase(),
@@ -842,10 +808,10 @@ class _PosScreenState extends State<PosScreen> {
               );
               if (ctx.mounted) Navigator.pop(ctx);
               if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
+                messenger.showSnackBar(
                   SnackBar(
-                    backgroundColor: ok ? AppTheme.accentGreen : AppTheme.primaryBlue,
-                    content: Text(ok ? 'Transaksi berhasil diproses ke database & mencetak thermal...' : 'Transaksi diproses secara offline'),
+                    backgroundColor: ok ? AppTheme.accentGreen : const Color(0xFFDC2626),
+                    content: Text(ok ? 'Transaksi berhasil diproses ke database & mencetak thermal...' : (pos.lastError ?? 'Gagal memproses transaksi.')),
                   ),
                 );
               }
@@ -909,8 +875,8 @@ class _PosScreenState extends State<PosScreen> {
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    backgroundColor: ok ? AppTheme.accentGreen : AppTheme.primaryBlue,
-                    content: Text(ok ? 'Shift kasir berhasil dibuka dengan modal ${currency.format(modal)}' : 'Shift kasir aktif (mode offline)'),
+                    backgroundColor: ok ? AppTheme.accentGreen : const Color(0xFFDC2626),
+                    content: Text(ok ? 'Shift kasir berhasil dibuka dengan modal ${currency.format(modal)}' : (pos.lastError ?? 'Gagal membuka shift kasir.')),
                   ),
                 );
               }

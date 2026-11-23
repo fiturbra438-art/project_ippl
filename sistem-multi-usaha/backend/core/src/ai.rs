@@ -10,6 +10,7 @@ use serde::Serialize;
 use std::sync::Arc;
 
 use crate::ai_gateway::ai_unavailable;
+use crate::auth::ensure_unit_access;
 use crate::models::Claims;
 use crate::schemas::{ApiResponse, ChatAiRequest, ChatAiResponse};
 use crate::state::AppState;
@@ -50,6 +51,13 @@ pub async fn chat_ai(
 ) -> impl IntoResponse {
     if state.ai_service_url.is_none() || payload.conversation_id.is_some() {
         return ai_unavailable("AI service belum dikonfigurasi.");
+    }
+    if claims.role != "owner" {
+        return (StatusCode::FORBIDDEN, Json(ApiResponse::<ChatAiResponse> {
+            status: "error".to_string(),
+            message: "Asisten AI konsolidasi hanya tersedia untuk Owner/Auditor.".to_string(),
+            data: None,
+        })).into_response();
     }
     let owner_id = claims.owner_id;
 
@@ -238,6 +246,8 @@ pub async fn get_forecast(
 ) -> impl IntoResponse {
     let owner_id = claims.owner_id;
 
+    if let Err(err) = ensure_unit_access(&state, &claims, unit_id).await { return err; }
+
     // Verifikasi unit_id milik bisnis pengguna
     let nama_unit: Option<String> = sqlx::query_scalar(
         "SELECT nama FROM business_units WHERE id = $1 AND owner_id = $2",
@@ -319,6 +329,13 @@ pub async fn get_anomali(
     State(state): State<Arc<AppState>>,
     claims: Claims,
 ) -> impl IntoResponse {
+    if claims.role != "owner" {
+        return (StatusCode::FORBIDDEN, Json(ApiResponse::<Vec<AnomaliItem>> {
+            status: "error".to_string(),
+            message: "Deteksi anomali konsolidasi hanya tersedia untuk Owner/Auditor.".to_string(),
+            data: None,
+        })).into_response();
+    }
     let owner_id = claims.owner_id;
 
     let mut anomalis: Vec<AnomaliItem> = Vec::new();

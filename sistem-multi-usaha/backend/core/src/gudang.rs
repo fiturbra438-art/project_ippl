@@ -7,6 +7,7 @@ use axum::{
 use chrono::Local;
 use std::sync::Arc;
 
+use crate::auth::{accessible_unit_ids, ensure_roles, ensure_unit_access};
 use crate::models::{
     Claims, PermintaanStokModel, StatusPermintaanStok, StatusTransfer, StokOpnameModel,
     TransferStokModel,
@@ -24,14 +25,19 @@ pub async fn list_permintaan_stok(
     claims: Claims,
 ) -> impl IntoResponse {
     let owner_id = claims.owner_id;
+    let unit_ids = match accessible_unit_ids(&state, &claims).await {
+        Ok(ids) => ids,
+        Err(response) => return response.into_response(),
+    };
 
     let rows = sqlx::query_as::<_, (i32, i32, i32, String, String, String, i32, Option<String>, chrono::NaiveDateTime, String)>(
         "SELECT id, owner_id, unit_id, nama_unit, pemohon, nama_produk, jumlah_diminta, alasan, waktu_pengajuan, status
          FROM stock_requests
-         WHERE owner_id = $1
+         WHERE owner_id = $1 AND unit_id = ANY($2)
          ORDER BY id DESC"
     )
     .bind(owner_id as i32)
+    .bind(&unit_ids)
     .fetch_all(&state.db)
     .await;
 
@@ -80,6 +86,9 @@ pub async fn create_permintaan_stok(
 ) -> impl IntoResponse {
     let owner_id = claims.owner_id;
     let pemohon = claims.sub.clone();
+    if let Err(response) = ensure_unit_access(&state, &claims, payload.unit_id).await {
+        return response.into_response();
+    }
 
     let unit_valid: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM business_units WHERE id = $1 AND owner_id = $2)",
@@ -169,6 +178,13 @@ pub async fn update_status_permintaan(
     Path(id): Path<i64>,
     Json(payload): Json<UpdateStatusPermintaanRequest>,
 ) -> impl IntoResponse {
+    if let Err(response) = ensure_roles(&claims, &["owner", "manager", "admin_gudang"]) {
+        return response.into_response();
+    }
+    let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM stock_requests r WHERE r.id = $1 AND r.owner_id = $2 AND EXISTS(SELECT 1 FROM business_units u WHERE u.id = r.unit_id AND ($3 OR EXISTS(SELECT 1 FROM user_units uu WHERE uu.user_id = $4 AND uu.unit_id = u.id))))")
+        .bind(id as i32).bind(claims.owner_id as i32).bind(claims.role == "owner").bind(claims.user_id)
+        .fetch_one(&state.db).await.unwrap_or(false);
+    if !allowed { return (StatusCode::FORBIDDEN, Json(ApiResponse::<()> { status: "error".to_string(), message: "Akses permintaan stok ditolak.".to_string(), data: None })).into_response(); }
     let status_str = format!("{:?}", payload.status).to_lowercase();
     let res = sqlx::query("UPDATE stock_requests SET status = $1 WHERE id = $2 AND owner_id = $3")
         .bind(&status_str)
@@ -209,14 +225,19 @@ pub async fn list_stok_opname(
     claims: Claims,
 ) -> impl IntoResponse {
     let owner_id = claims.owner_id;
+    let unit_ids = match accessible_unit_ids(&state, &claims).await {
+        Ok(ids) => ids,
+        Err(response) => return response.into_response(),
+    };
 
-    let rows = sqlx::query_as::<_, (i32, i32, i32, String, String, i32, i32, i32, Option<String>, chrono::NaiveDate)>(
-        "SELECT id, owner_id, unit_id, nama_unit, nama_produk, stok_sistem, stok_fisik, selisih, alasan, tanggal
+    let rows = sqlx::query_as::<_, (i32, i32, i32, i32, String, String, i32, i32, i32, Option<String>, chrono::NaiveDate)>(
+        "SELECT id, owner_id, unit_id, product_id, nama_unit, nama_produk, stok_sistem, stok_fisik, selisih, alasan, tanggal
          FROM stock_opnames
-         WHERE owner_id = $1
+         WHERE owner_id = $1 AND unit_id = ANY($2)
          ORDER BY id DESC"
     )
     .bind(owner_id as i32)
+    .bind(&unit_ids)
     .fetch_all(&state.db)
     .await;
 
@@ -227,13 +248,14 @@ pub async fn list_stok_opname(
                 id: r.0 as i64,
                 owner_id: r.1 as i64,
                 unit_id: r.2 as i64,
-                nama_unit: r.3,
-                nama_produk: r.4,
-                stok_sistem: r.5,
-                stok_fisik: r.6,
-                selisih: r.7,
-                alasan: r.8.unwrap_or_default(),
-                tanggal: r.9.to_string(),
+                product_id: r.3 as i64,
+                nama_unit: r.4,
+                nama_produk: r.5,
+                stok_sistem: r.6,
+                stok_fisik: r.7,
+                selisih: r.8,
+                alasan: r.9.unwrap_or_default(),
+                tanggal: r.10.to_string(),
             })
             .collect(),
         Err(_) => Vec::new(),
@@ -256,6 +278,12 @@ pub async fn create_stok_opname(
     Json(payload): Json<CreateStokOpnameRequest>,
 ) -> impl IntoResponse {
     let owner_id = claims.owner_id;
+    if !["owner", "manager", "admin_gudang"].contains(&claims.role.as_str()) {
+        return (StatusCode::FORBIDDEN, Json(ApiResponse::<StokOpnameModel> { status: "error".to_string(), message: "Role tidak boleh mencatat stok opname.".to_string(), data: None })).into_response();
+    }
+    if let Err(response) = ensure_unit_access(&state, &claims, payload.unit_id).await {
+        return response.into_response();
+    }
 
     let unit_valid: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM business_units WHERE id = $1 AND owner_id = $2)",
@@ -298,15 +326,25 @@ pub async fn create_stok_opname(
         .flatten()
         .unwrap_or_else(|| "Unit Usaha".to_string());
 
-    // Ambil stok sistem saat ini (dibatasi produk milik owner)
+    let product_name: Option<String> = sqlx::query_scalar(
+        "SELECT p.nama FROM products p JOIN inventories i ON i.product_id = p.id WHERE p.id = $1 AND p.owner_id = $2 AND i.unit_id = $3",
+    )
+    .bind(payload.product_id as i32)
+    .bind(owner_id as i32)
+    .bind(payload.unit_id as i32)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    let product_name = match product_name {
+        Some(name) => name,
+        None => return (StatusCode::NOT_FOUND, Json(ApiResponse::<StokOpnameModel> { status: "error".to_string(), message: "Produk tidak ditemukan pada unit.".to_string(), data: None })).into_response(),
+    };
     let stok_sistem: i32 = sqlx::query_scalar(
-        "SELECT i.qty FROM inventories i
-         JOIN products p ON i.product_id = p.id
-         WHERE i.unit_id = $1 AND LOWER(p.nama) = LOWER($2) AND p.owner_id = $3",
+        "SELECT qty FROM inventories WHERE unit_id = $1 AND product_id = $2",
     )
     .bind(payload.unit_id as i32)
-    .bind(&payload.nama_produk)
-    .bind(owner_id as i32)
+    .bind(payload.product_id as i32)
     .fetch_optional(&state.db)
     .await
     .ok()
@@ -315,18 +353,17 @@ pub async fn create_stok_opname(
 
     let selisih = payload.stok_fisik - stok_sistem;
 
-    // Rekonsiliasi update stok fisik ke PostgreSQL `inventories` (dibatasi owner_id)
-    let _ = sqlx::query(
-        "UPDATE inventories 
-         SET qty = $1 
-         WHERE unit_id = $2 AND product_id = (SELECT id FROM products WHERE LOWER(nama) = LOWER($3) AND owner_id = $4 LIMIT 1)"
+    let update_result = sqlx::query(
+        "UPDATE inventories SET qty = $1 WHERE unit_id = $2 AND product_id = $3"
     )
     .bind(payload.stok_fisik)
     .bind(payload.unit_id as i32)
-    .bind(&payload.nama_produk)
-    .bind(owner_id as i32)
+    .bind(payload.product_id as i32)
     .execute(&state.db)
     .await;
+    if let Err(e) = update_result {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<StokOpnameModel> { status: "error".to_string(), message: format!("Gagal memperbarui stok: {}", e), data: None })).into_response();
+    }
 
     // Catat ke tabel `stock_opnames`
     let row: Result<(i32,), sqlx::Error> = sqlx::query_as(
@@ -337,7 +374,7 @@ pub async fn create_stok_opname(
     .bind(owner_id as i32)
     .bind(payload.unit_id as i32)
     .bind(&nama_unit)
-    .bind(&payload.nama_produk)
+    .bind(&product_name)
     .bind(stok_sistem)
     .bind(payload.stok_fisik)
     .bind(selisih)
@@ -351,8 +388,9 @@ pub async fn create_stok_opname(
                 id: r.0 as i64,
                 owner_id,
                 unit_id: payload.unit_id,
+                product_id: payload.product_id,
                 nama_unit,
-                nama_produk: payload.nama_produk,
+                nama_produk: product_name,
                 stok_sistem,
                 stok_fisik: payload.stok_fisik,
                 selisih,
@@ -388,6 +426,10 @@ pub async fn list_transfer_stok(
     claims: Claims,
 ) -> impl IntoResponse {
     let owner_id = claims.owner_id;
+    let unit_ids = match accessible_unit_ids(&state, &claims).await {
+        Ok(ids) => ids,
+        Err(response) => return response.into_response(),
+    };
 
     let rows = sqlx::query_as::<_, (i32, Option<i32>, Option<i32>, i32, chrono::NaiveDateTime, Option<String>, Option<String>, Option<String>, Option<i32>, Option<String>, Option<chrono::NaiveDateTime>)>(
         "SELECT sm.id, sm.unit_asal_id, sm.unit_tujuan_id, sm.qty, sm.tanggal, 
@@ -397,12 +439,14 @@ pub async fn list_transfer_stok(
          LEFT JOIN business_units ua ON sm.unit_asal_id = ua.id
          LEFT JOIN business_units ut ON sm.unit_tujuan_id = ut.id
          LEFT JOIN inventories inv ON sm.inventory_id = inv.id
-         LEFT JOIN products p ON inv.product_id = p.id
-         WHERE sm.tipe = 'transfer' 
-           AND (ua.owner_id = $1 OR ut.owner_id = $1)
-         ORDER BY sm.id DESC"
-    )
-    .bind(owner_id as i32)
+          LEFT JOIN products p ON inv.product_id = p.id
+            WHERE sm.tipe = 'transfer'
+             AND (ua.owner_id = $1 OR ut.owner_id = $1)
+            AND (sm.unit_asal_id = ANY($2) OR sm.unit_tujuan_id = ANY($2))
+          ORDER BY sm.id DESC"
+     )
+     .bind(owner_id as i32)
+     .bind(&unit_ids)
     .fetch_all(&state.db)
     .await;
 
@@ -416,7 +460,7 @@ pub async fn list_transfer_stok(
                 nama_unit_asal: r.5.unwrap_or_else(|| format!("Unit #{}", r.1.unwrap_or(0))),
                 unit_tujuan_id: r.2.unwrap_or(0) as i64,
                 nama_unit_tujuan: r.6.unwrap_or_else(|| format!("Unit #{}", r.2.unwrap_or(0))),
-                produk_id: r.8.unwrap_or(1) as i64,
+                produk_id: r.8.unwrap_or(0) as i64,
                 nama_produk: r.7.unwrap_or_else(|| "Transfer Barang".to_string()),
                 jumlah: r.3,
                 waktu_kirim: r.4.format("%Y-%m-%d %H:%M").to_string(),
@@ -452,6 +496,12 @@ pub async fn create_transfer_stok(
 ) -> impl IntoResponse {
     let owner_id = claims.owner_id;
     let user_id = claims.user_id;
+    if let Err(response) = ensure_unit_access(&state, &claims, payload.unit_asal_id).await {
+        return response.into_response();
+    }
+    if let Err(response) = ensure_unit_access(&state, &claims, payload.unit_tujuan_id).await {
+        return response.into_response();
+    }
 
     if payload.unit_asal_id == payload.unit_tujuan_id {
         return (
@@ -479,10 +529,11 @@ pub async fn create_transfer_stok(
 
     // Verifikasi produk milik owner ini
     let produk_valid: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM products WHERE id = $1 AND owner_id = $2)",
+        "SELECT EXISTS(SELECT 1 FROM products p JOIN inventories i ON i.product_id = p.id WHERE p.id = $1 AND p.owner_id = $2 AND i.unit_id = $3)",
     )
     .bind(payload.produk_id as i32)
     .bind(owner_id as i32)
+    .bind(payload.unit_asal_id as i32)
     .fetch_one(&state.db)
     .await
     .unwrap_or(false);
@@ -608,10 +659,13 @@ pub async fn update_status_transfer(
             LEFT JOIN business_units ua ON ua.id = sm.unit_asal_id
             LEFT JOIN business_units ut ON ut.id = sm.unit_tujuan_id
             WHERE sm.id = $1 AND (ua.owner_id = $2 OR ut.owner_id = $2)
+              AND ($3 OR EXISTS (SELECT 1 FROM user_units uu WHERE uu.user_id = $4 AND uu.unit_id IN (sm.unit_asal_id, sm.unit_tujuan_id)))
         )",
     )
     .bind(id as i32)
     .bind(claims.owner_id as i32)
+    .bind(claims.role == "owner")
+    .bind(claims.user_id)
     .fetch_one(&state.db)
     .await
     .unwrap_or(false);

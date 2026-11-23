@@ -68,8 +68,9 @@ class GudangProvider extends ChangeNotifier {
           return StokOpnameModel(
             id: (item['id'] as num).toInt(),
             unitId: (item['unit_id'] as num).toInt(),
-            namaUnit: item['nama_unit'] as String? ?? '',
-            namaProduk: item['nama_produk'] as String? ?? '',
+             namaUnit: item['nama_unit'] as String? ?? '',
+             productId: ((item['product_id'] ?? item['produk_id']) as num).toInt(),
+             namaProduk: item['nama_produk'] as String? ?? '',
             stokSistem: (item['stok_sistem'] as num?)?.toInt() ?? 0,
             stokFisik: (item['stok_fisik'] as num?)?.toInt() ?? 0,
             alasan: item['alasan'] as String? ?? '',
@@ -163,8 +164,8 @@ class GudangProvider extends ChangeNotifier {
     _lastError = null;
     try {
       final res = await ApiService.post('/gudang/opname', {
-        'unit_id': opname.unitId,
-        'nama_produk': opname.namaProduk,
+         'unit_id': opname.unitId,
+         'product_id': opname.productId,
         'stok_fisik': opname.stokFisik,
         'alasan': opname.alasan,
       });
