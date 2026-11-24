@@ -10,11 +10,14 @@ mod karyawan;
 mod models;
 mod pos;
 mod produk;
+mod ratelimit;
 mod schemas;
 mod state;
 mod usaha;
 
 use axum::{
+    extract::State,
+    http::StatusCode,
     routing::{get, patch, post, put},
     Router,
 };
@@ -23,6 +26,16 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+async fn readiness(State(state): State<Arc<AppState>>) -> (StatusCode, &'static str) {
+    match sqlx::query_scalar::<_, i32>("SELECT 1")
+        .fetch_one(&state.db)
+        .await
+    {
+        Ok(1) => (StatusCode::OK, "ready"),
+        _ => (StatusCode::SERVICE_UNAVAILABLE, "not ready"),
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -77,8 +90,8 @@ async fn main() {
     let serve_dir = ServeDir::new(&web_dir).fallback(ServeFile::new(&index_file));
 
     let app = Router::new()
-        // Health Check
         .route("/health", get(|| async { "Rust Core Backend OK" }))
+        .route("/ready", get(readiness))
         // ==================== 1. MODUL AUTENTIKASI ====================
         .route("/api/auth/owner/register", post(auth::register_owner))
         .route("/api/auth/owner/login", post(auth::login_owner))
@@ -197,5 +210,10 @@ async fn main() {
 
     tracing::info!("🦀 Server Core Rust berjalan di http://0.0.0.0:8000");
 
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }

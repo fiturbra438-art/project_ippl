@@ -2,7 +2,7 @@
 
 use axum::{
     async_trait,
-    extract::{FromRequestParts, State},
+    extract::{ConnectInfo, FromRequestParts, State},
     http::{request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
@@ -10,6 +10,7 @@ use axum::{
 use bcrypt::{hash, verify};
 use chrono::{Duration, Utc};
 use jsonwebtoken::{encode, EncodingKey, Header};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::models::{Claims, PaketLangganan};
@@ -115,6 +116,53 @@ pub fn access_error(status: StatusCode) -> Response {
         }),
     )
         .into_response()
+}
+
+fn too_many_requests<T>() -> (StatusCode, Json<ApiResponse<T>>) {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(ApiResponse {
+            status: "error".to_string(),
+            message: "Terlalu banyak percobaan. Silakan coba lagi nanti.".to_string(),
+            data: None,
+        }),
+    )
+}
+
+fn limit_auth(state: &AppState, action: &str, ip: &str, account: &str) -> bool {
+    let ip_ok = state.rate_limiter.allow(
+        &format!("{action}:ip:{ip}"),
+        50,
+        std::time::Duration::from_secs(900),
+    );
+    let account_ok = state.rate_limiter.allow(
+        &format!("{action}:akun:{account}"),
+        10,
+        std::time::Duration::from_secs(900),
+    );
+    ip_ok && account_ok
+}
+
+async fn audit_auth_failure(
+    state: &AppState,
+    owner_id: i32,
+    email: &str,
+    role: &str,
+    aksi: &str,
+    detail: &str,
+) {
+    let _ = sqlx::query(
+        "INSERT INTO audit_logs (owner_id, aktor, role, aksi, modul, target, detail, waktu)
+         VALUES ($1, $2, $3, $4, 'auth', $5, $6, now())",
+    )
+    .bind(owner_id)
+    .bind(email)
+    .bind(role)
+    .bind(aksi)
+    .bind(email)
+    .bind(detail)
+    .execute(&state.db)
+    .await;
 }
 
 #[allow(clippy::result_large_err)]
@@ -306,8 +354,14 @@ pub async fn register_owner(
 // 2. LOGIN OWNER (Membaca kredensial nyata dari PostgreSQL `users`)
 pub async fn login_owner(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<LoginOwnerRequest>,
 ) -> impl IntoResponse {
+    let account_key = payload.email.trim().to_lowercase();
+    if !limit_auth(&state, "owner-login", &addr.ip().to_string(), &account_key) {
+        return too_many_requests::<serde_json::Value>();
+    }
+
     let owner_row = sqlx::query_as::<_, (i32, String, String, String, Option<String>, Option<bool>, Option<i32>, Option<i32>, Option<String>)>(
         "SELECT id, nama, email, password_hash, tier, is_2fa_active, kuota_unit_usaha, sisa_kuota_ai, nama_perusahaan
          FROM users
@@ -332,6 +386,15 @@ pub async fn login_owner(
     };
 
     if !verify(&payload.password, &owner.3).unwrap_or(false) {
+        audit_auth_failure(
+            &state,
+            owner.0,
+            &owner.2,
+            "owner",
+            "login_gagal",
+            "kredensial tidak cocok",
+        )
+        .await;
         return (
             StatusCode::UNAUTHORIZED,
             Json(ApiResponse::<serde_json::Value> {
@@ -344,6 +407,13 @@ pub async fn login_owner(
 
     let is_2fa = owner.5.unwrap_or(true);
     if is_2fa {
+        if !state.rate_limiter.cooldown(
+            &format!("owner-otp:akun:{account_key}"),
+            std::time::Duration::from_secs(60),
+        ) {
+            return too_many_requests::<serde_json::Value>();
+        }
+
         // Buat 6 angka OTP acak dinamis
         let otp_code = crate::email::generate_dynamic_otp();
         let expires_at = Utc::now() + Duration::minutes(5);
@@ -452,8 +522,19 @@ pub async fn login_owner(
 // 3. VERIFIKASI 2FA OWNER (Memverifikasi kecocokan OTP dengan secret di database)
 pub async fn verify_owner_2fa(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<Verify2FARequest>,
 ) -> impl IntoResponse {
+    let account_key = payload.email.trim().to_lowercase();
+    if !limit_auth(
+        &state,
+        "owner-otp-verifikasi",
+        &addr.ip().to_string(),
+        &account_key,
+    ) {
+        return too_many_requests::<OwnerAuthResponse>();
+    }
+
     // Ambil data secret 2FA dari tabel PostgreSQL `users`
     let owner_row = sqlx::query_as::<
         _,
@@ -493,6 +574,15 @@ pub async fn verify_owner_2fa(
     };
 
     if !verify(&payload.password, &owner.3).unwrap_or(false) {
+        audit_auth_failure(
+            &state,
+            owner.0,
+            &owner.2,
+            "owner",
+            "otp_verifikasi_gagal",
+            "kredensial tidak cocok",
+        )
+        .await;
         return (
             StatusCode::UNAUTHORIZED,
             Json(ApiResponse::<OwnerAuthResponse> {
@@ -561,6 +651,15 @@ pub async fn verify_owner_2fa(
 
     // Validasi kecocokan kode OTP dengan perbandingan waktu-konstan
     if !constant_time_eq(payload.code_otp.trim(), db_otp.trim()) {
+        audit_auth_failure(
+            &state,
+            owner.0,
+            &owner.2,
+            "owner",
+            "otp_verifikasi_gagal",
+            "kode otp tidak cocok",
+        )
+        .await;
         let new_attempts = attempts + 1;
         if new_attempts >= MAX_OTP_ATTEMPTS {
             // Kunci OTP setelah batas percobaan tercapai
@@ -720,9 +819,20 @@ pub async fn upgrade_owner_tier(
 // 5. LOGIN KARYAWAN (Validasi dari tabel PostgreSQL `users` & `user_units`)
 pub async fn login_karyawan(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(payload): Json<LoginKaryawanRequest>,
 ) -> impl IntoResponse {
+    let account_key = payload.email.trim().to_lowercase();
+    if !limit_auth(
+        &state,
+        "karyawan-login",
+        &addr.ip().to_string(),
+        &account_key,
+    ) {
+        return too_many_requests::<KaryawanAuthResponse>();
+    }
+
     let client_platform = headers
         .get("x-client-platform")
         .and_then(|h| h.to_str().ok())
@@ -775,6 +885,17 @@ pub async fn login_karyawan(
     }
 
     if !verify(&payload.password, &karyawan.4).unwrap_or(false) {
+        if let Some(owner_id) = karyawan.1 {
+            audit_auth_failure(
+                &state,
+                owner_id,
+                &karyawan.3,
+                &karyawan.5,
+                "login_gagal",
+                "kredensial tidak cocok",
+            )
+            .await;
+        }
         return (
             StatusCode::UNAUTHORIZED,
             Json(ApiResponse::<KaryawanAuthResponse> {

@@ -15,7 +15,8 @@ use crate::models::{
 };
 use crate::schemas::{
     ApiResponse, BukaShiftRequest, CheckoutRequest, CreateTransaksiManualRequest,
-    RefundTransaksiRequest, ReturnRentalRequest, TutupShiftRequest, UpdateServiceStatusRequest,
+    PaginatedResponse, RefundTransaksiRequest, ReturnRentalRequest, TutupShiftRequest,
+    UpdateServiceStatusRequest,
 };
 use crate::state::AppState;
 
@@ -721,97 +722,124 @@ pub async fn list_transaksi(
             None
         };
 
-    // Ambil data transaksi langsung dari PostgreSQL
-    let rows = if let Some(uid) = query.unit_id {
-        sqlx::query_as::<
-            _,
-            (
-                i32,
-                i32,
-                i32,
-                String,
-                chrono::NaiveDateTime,
-                rust_decimal::Decimal,
-                String,
-                String,
-            ),
-        >(
-            "SELECT t.id, u.owner_id, t.unit_id, u.nama AS nama_unit, t.tanggal, t.total, t.metode_bayar, t.status
-             FROM transactions t
-             JOIN business_units u ON u.id = t.unit_id
-             WHERE u.owner_id = $1 AND t.unit_id = $2
-             ORDER BY t.id DESC",
+    let (pos_filter, cash_filter, scoped_bind) = if let Some(uid) = query.unit_id {
+        (
+            "u.owner_id = $1 AND t.unit_id = $2".to_string(),
+            "u.owner_id = $1 AND c.unit_id = $2".to_string(),
+            Some(uid as i32),
         )
-        .bind(owner_id as i32)
-        .bind(uid as i32)
-        .fetch_all(&state.db)
-        .await
-    } else if let Some(ids) = &scoped_ids {
-        sqlx::query_as::<
-            _,
-            (
-                i32,
-                i32,
-                i32,
-                String,
-                chrono::NaiveDateTime,
-                rust_decimal::Decimal,
-                String,
-                String,
-            ),
-        >(
-            "SELECT t.id, u.owner_id, t.unit_id, u.nama AS nama_unit, t.tanggal, t.total, t.metode_bayar, t.status
-             FROM transactions t
-             JOIN business_units u ON u.id = t.unit_id
-             WHERE u.owner_id = $1 AND t.unit_id = ANY($2)
-             ORDER BY t.id DESC",
+    } else if scoped_ids.is_some() {
+        (
+            "u.owner_id = $1 AND t.unit_id = ANY($2)".to_string(),
+            "u.owner_id = $1 AND c.unit_id = ANY($2)".to_string(),
+            None,
         )
-        .bind(owner_id as i32)
-        .bind(ids)
-        .fetch_all(&state.db)
-        .await
     } else {
-        sqlx::query_as::<
-            _,
-            (
-                i32,
-                i32,
-                i32,
-                String,
-                chrono::NaiveDateTime,
-                rust_decimal::Decimal,
-                String,
-                String,
-            ),
-        >(
-            "SELECT t.id, u.owner_id, t.unit_id, u.nama AS nama_unit, t.tanggal, t.total, t.metode_bayar, t.status
-             FROM transactions t
-             JOIN business_units u ON u.id = t.unit_id
-             WHERE u.owner_id = $1
-             ORDER BY t.id DESC",
+        (
+            "u.owner_id = $1".to_string(),
+            "u.owner_id = $1".to_string(),
+            None,
         )
-        .bind(owner_id as i32)
-        .fetch_all(&state.db)
-        .await
     };
 
+    let union_sql = format!(
+        "SELECT t.id, u.owner_id, t.unit_id, u.nama AS nama_unit, t.tanggal,
+                'pemasukan'::text AS jenis, 'Penjualan POS'::text AS kategori,
+                t.total AS jumlah, t.metode_bayar AS metode, 'pos'::text AS sumber,
+                t.status::text AS status
+         FROM transactions t
+         JOIN business_units u ON u.id = t.unit_id
+         WHERE {pos_filter}
+         UNION ALL
+         SELECT c.id, u.owner_id, c.unit_id, u.nama AS nama_unit, c.tanggal::timestamp,
+                CASE WHEN lower(c.jenis) = 'masuk' THEN 'pemasukan' ELSE 'pengeluaran' END AS jenis,
+                c.kategori, c.jumlah, 'Manual'::text AS metode, 'cash'::text AS sumber,
+                NULL::text AS status
+         FROM cash_flows c
+         JOIN business_units u ON u.id = c.unit_id
+         WHERE {cash_filter}"
+    );
+
+    let jenis_filter = match query.jenis.as_deref() {
+        Some(j) if j.eq_ignore_ascii_case("pemasukan") => " WHERE jenis = 'pemasukan'",
+        Some(j) if j.eq_ignore_ascii_case("pengeluaran") => " WHERE jenis = 'pengeluaran'",
+        _ => "",
+    };
+
+    let offset = query.offset.unwrap_or(0).max(0);
+    let limit = query.limit.filter(|l| *l > 0).unwrap_or(500).min(500);
+    let scope_bind = scoped_bind.is_some() || scoped_ids.is_some();
+    let (limit_idx, offset_idx) = if scope_bind { (3, 4) } else { (2, 3) };
+
+    let count_sql = format!("SELECT COUNT(*) FROM ({union_sql}) AS g{jenis_filter}");
+    let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql).bind(owner_id as i32);
+    if let Some(uid) = scoped_bind {
+        count_q = count_q.bind(uid);
+    } else if let Some(ids) = &scoped_ids {
+        count_q = count_q.bind(ids);
+    }
+    let total = count_q.fetch_one(&state.db).await.unwrap_or(0);
+
+    let data_sql = format!(
+        "SELECT id, owner_id, unit_id, nama_unit, tanggal, jenis, kategori, jumlah, metode, sumber, status
+         FROM ({union_sql}) AS g{jenis_filter}
+         ORDER BY tanggal DESC, id DESC, sumber ASC
+         LIMIT ${limit_idx} OFFSET ${offset_idx}"
+    );
+    let mut data_q = sqlx::query_as::<
+        _,
+        (
+            i32,
+            i32,
+            i32,
+            String,
+            chrono::NaiveDateTime,
+            String,
+            String,
+            rust_decimal::Decimal,
+            String,
+            String,
+            Option<String>,
+        ),
+    >(&data_sql)
+    .bind(owner_id as i32);
+    if let Some(uid) = scoped_bind {
+        data_q = data_q.bind(uid);
+    } else if let Some(ids) = &scoped_ids {
+        data_q = data_q.bind(ids);
+    }
+    let rows = data_q.bind(limit).bind(offset).fetch_all(&state.db).await;
+
     use rust_decimal::prelude::ToPrimitive;
-    let mut hasil: Vec<TransaksiModel> = match rows {
+    let hasil: Vec<TransaksiModel> = match rows {
         Ok(list) => list
             .into_iter()
             .map(|r| {
-                let total_f64 = r.5.to_f64().unwrap_or(0.0);
+                let jenis = if r.5.eq_ignore_ascii_case("pemasukan") {
+                    JenisTransaksi::Pemasukan
+                } else {
+                    JenisTransaksi::Pengeluaran
+                };
+                let keterangan = if r.9 == "pos" {
+                    format!(
+                        "Transaksi Kasir #{} ({})",
+                        r.0,
+                        r.10.clone().unwrap_or_default()
+                    )
+                } else {
+                    "Transaksi Manual".to_string()
+                };
                 TransaksiModel {
                     id: r.0 as i64,
                     owner_id: r.1 as i64,
                     unit_id: r.2 as i64,
                     nama_unit: r.3,
                     tanggal: r.4.format("%Y-%m-%d %H:%M").to_string(),
-                    jenis: JenisTransaksi::Pemasukan,
-                    kategori: "Penjualan POS".to_string(),
-                    jumlah: total_f64,
-                    keterangan: format!("Transaksi Kasir #{} ({})", r.0, r.7),
-                    metode_pembayaran: Some(r.6),
+                    jenis,
+                    kategori: r.6,
+                    jumlah: r.7.to_f64().unwrap_or(0.0),
+                    keterangan,
+                    metode_pembayaran: Some(r.8),
                     items: None,
                 }
             })
@@ -822,134 +850,17 @@ pub async fn list_transaksi(
         }
     };
 
-    // Gabungkan dengan transaksi manual yang tersimpan permanen di tabel cash_flows
-    let cash_rows = if let Some(uid) = query.unit_id {
-        sqlx::query_as::<
-            _,
-            (
-                i32,
-                i32,
-                String,
-                chrono::NaiveDateTime,
-                String,
-                String,
-                rust_decimal::Decimal,
-            ),
-        >(
-            "SELECT c.id, c.unit_id, u.nama, c.tanggal::timestamp, c.jenis, c.kategori, c.jumlah
-             FROM cash_flows c
-             JOIN business_units u ON u.id = c.unit_id
-             WHERE u.owner_id = $1 AND c.unit_id = $2
-             ORDER BY c.id DESC",
-        )
-        .bind(owner_id as i32)
-        .bind(uid as i32)
-        .fetch_all(&state.db)
-        .await
-    } else if let Some(ids) = &scoped_ids {
-        sqlx::query_as::<
-            _,
-            (
-                i32,
-                i32,
-                String,
-                chrono::NaiveDateTime,
-                String,
-                String,
-                rust_decimal::Decimal,
-            ),
-        >(
-            "SELECT c.id, c.unit_id, u.nama, c.tanggal::timestamp, c.jenis, c.kategori, c.jumlah
-             FROM cash_flows c
-             JOIN business_units u ON u.id = c.unit_id
-             WHERE u.owner_id = $1 AND c.unit_id = ANY($2)
-             ORDER BY c.id DESC",
-        )
-        .bind(owner_id as i32)
-        .bind(ids)
-        .fetch_all(&state.db)
-        .await
-    } else {
-        sqlx::query_as::<
-            _,
-            (
-                i32,
-                i32,
-                String,
-                chrono::NaiveDateTime,
-                String,
-                String,
-                rust_decimal::Decimal,
-            ),
-        >(
-            "SELECT c.id, c.unit_id, u.nama, c.tanggal::timestamp, c.jenis, c.kategori, c.jumlah
-             FROM cash_flows c
-             JOIN business_units u ON u.id = c.unit_id
-             WHERE u.owner_id = $1
-             ORDER BY c.id DESC",
-        )
-        .bind(owner_id as i32)
-        .fetch_all(&state.db)
-        .await
-    };
-
-    if let Ok(list) = cash_rows {
-        for r in list {
-            let jenis = if r.4.eq_ignore_ascii_case("masuk") {
-                JenisTransaksi::Pemasukan
-            } else {
-                JenisTransaksi::Pengeluaran
-            };
-            hasil.push(TransaksiModel {
-                id: r.0 as i64,
-                owner_id,
-                unit_id: r.1 as i64,
-                nama_unit: r.2,
-                tanggal: r.3.format("%Y-%m-%d %H:%M").to_string(),
-                jenis,
-                kategori: r.5,
-                jumlah: r.6.to_f64().unwrap_or(0.0),
-                keterangan: "Transaksi Manual".to_string(),
-                metode_pembayaran: Some("Manual".to_string()),
-                items: None,
-            });
-        }
-    }
-
-    // Urutkan gabungan transaksi POS + manual dari yang terbaru
-    hasil.sort_by(|a, b| b.tanggal.cmp(&a.tanggal));
-
-    // Filter berdasarkan query jenis jika ada
-    if let Some(j) = &query.jenis {
-        let j_lower = j.to_lowercase();
-        hasil.retain(|t| {
-            if j_lower == "pemasukan" && t.jenis != JenisTransaksi::Pemasukan {
-                return false;
-            }
-            if j_lower == "pengeluaran" && t.jenis != JenisTransaksi::Pengeluaran {
-                return false;
-            }
-            true
-        });
-    }
-
-    let offset = query.offset.unwrap_or(0).max(0) as usize;
-    let limit = query.limit.unwrap_or(0);
-    if offset > 0 || limit > 0 {
-        let limit = if limit > 0 {
-            limit.min(500) as usize
-        } else {
-            hasil.len()
-        };
-        hasil = hasil.into_iter().skip(offset).take(limit).collect();
-    }
-
     (
         StatusCode::OK,
-        Json(ApiResponse::<Vec<TransaksiModel>> {
+        Json(ApiResponse::<PaginatedResponse<TransaksiModel>> {
             status: "success".to_string(),
             message: format!("Berhasil mengambil {} transaksi.", hasil.len()),
-            data: Some(hasil),
+            data: Some(PaginatedResponse {
+                items: hasil,
+                total,
+                limit,
+                offset,
+            }),
         }),
     )
         .into_response()

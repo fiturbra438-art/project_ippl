@@ -31,7 +31,8 @@ class TransaksiProvider extends ChangeNotifier {
       final endpoint = (unitId != null && unitId > 0) ? '/transaksi?unit_id=$unitId' : '/transaksi';
       final res = await ApiService.get(endpoint);
       if (res != null && res['status'] == 'success' && res['data'] != null) {
-        final list = res['data'] as List;
+        final paginated = res['data'] as Map<String, dynamic>;
+        final list = paginated['items'] as List? ?? [];
         _daftarTransaksi = list.map<TransaksiModel>((item) {
           final jenisStr = (item['jenis'] as String? ?? 'pemasukan').toLowerCase();
           final tglStr = item['tanggal'] as String? ?? '';

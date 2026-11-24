@@ -28,7 +28,7 @@ services:
       backend-ai:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8000/ready || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -73,8 +73,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET wajib diatur}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8000,http://localhost:8001}
       PORT: 8001
-    ports:
-      - "${AI_PORT:-8001}:8001"
+    expose:
+      - "8001"
 
 volumes:
   postgres_data:

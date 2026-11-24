@@ -5,6 +5,7 @@ pub struct AppState {
     pub jwt_secret: String,
     pub ai_service_url: Option<String>,
     pub http: reqwest::Client,
+    pub rate_limiter: crate::ratelimit::RateLimiter,
 }
 
 impl AppState {
@@ -328,6 +329,7 @@ impl AppState {
             jwt_secret,
             ai_service_url,
             http,
+            rate_limiter: crate::ratelimit::RateLimiter::new(),
         }
     }
 }
