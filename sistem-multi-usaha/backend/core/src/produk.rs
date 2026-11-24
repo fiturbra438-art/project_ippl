@@ -10,7 +10,10 @@ use std::sync::Arc;
 
 use crate::auth::ensure_unit_access;
 use crate::models::{Claims, ProdukModel};
-use crate::schemas::{AdjustStokRequest, ApiResponse, CreateProdukRequest, UpdateProdukRequest};
+use crate::schemas::{
+    AdjustStokRequest, ApiResponse, CreateProdukRequest, ImportProdukError, ImportProdukRequest,
+    ImportProdukResponse, UpdateProdukRequest,
+};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -377,6 +380,226 @@ pub async fn create_produk(
             message: "Produk berhasil ditambahkan dan tersimpan permanen di database PostgreSQL."
                 .to_string(),
             data: Some(new_produk),
+        }),
+    )
+        .into_response()
+}
+
+// 4b. IMPOR PRODUK BATCH (validasi semua baris, lalu all-or-nothing)
+pub async fn import_produk(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Json(payload): Json<ImportProdukRequest>,
+) -> impl IntoResponse {
+    if !["owner", "manager"].contains(&claims.role.as_str()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<ImportProdukResponse> {
+                status: "error".to_string(),
+                message: "Role tidak boleh mengimpor produk.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
+    if let Err(response) = ensure_unit_access(&state, &claims, payload.unit_id).await {
+        return response.into_response();
+    }
+    if payload.rows.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<ImportProdukResponse> {
+                status: "error".to_string(),
+                message: "Tidak ada baris produk untuk diimpor.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
+    if payload.rows.len() > 2000 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<ImportProdukResponse> {
+                status: "error".to_string(),
+                message: "Maksimal 2000 baris per impor.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
+
+    let mut errors: Vec<ImportProdukError> = Vec::new();
+    let mut seen_sku = std::collections::HashSet::new();
+    for (idx, row) in payload.rows.iter().enumerate() {
+        let baris = idx + 1;
+        let sku = row.sku.trim();
+        let nama = row.nama.trim();
+        let mut pesan = Vec::new();
+        if sku.is_empty() {
+            pesan.push("SKU wajib diisi");
+        }
+        if nama.is_empty() {
+            pesan.push("nama wajib diisi");
+        }
+        if !row.harga_beli.is_finite() || row.harga_beli < 0.0 {
+            pesan.push("harga_beli tidak valid");
+        }
+        if !row.harga_jual.is_finite() || row.harga_jual < 0.0 {
+            pesan.push("harga_jual tidak valid");
+        }
+        if row.stok < 0 {
+            pesan.push("stok tidak boleh negatif");
+        }
+        if row.min_stok.unwrap_or(0) < 0 {
+            pesan.push("min_stok tidak boleh negatif");
+        }
+        if !sku.is_empty() && !seen_sku.insert(sku.to_lowercase()) {
+            pesan.push("SKU duplikat di dalam file");
+        }
+        if !pesan.is_empty() {
+            errors.push(ImportProdukError {
+                baris,
+                pesan: pesan.join(", "),
+            });
+        }
+    }
+
+    if errors.is_empty() {
+        let skus: Vec<String> = payload
+            .rows
+            .iter()
+            .map(|row| row.sku.trim().to_string())
+            .collect();
+        let existing: Vec<String> =
+            sqlx::query_scalar("SELECT sku FROM products WHERE owner_id = $1 AND sku = ANY($2)")
+                .bind(claims.owner_id as i32)
+                .bind(&skus)
+                .fetch_all(&state.db)
+                .await
+                .unwrap_or_default();
+        if !existing.is_empty() {
+            for (idx, row) in payload.rows.iter().enumerate() {
+                if existing.iter().any(|sku| sku == row.sku.trim()) {
+                    errors.push(ImportProdukError {
+                        baris: idx + 1,
+                        pesan: format!("SKU '{}' sudah terdaftar", row.sku.trim()),
+                    });
+                }
+            }
+        }
+    }
+
+    if !errors.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<ImportProdukResponse> {
+                status: "error".to_string(),
+                message: "Impor dibatalkan; tidak ada produk yang disimpan.".to_string(),
+                data: Some(ImportProdukResponse {
+                    berhasil: 0,
+                    gagal: errors.len(),
+                    produk_ids: Vec::new(),
+                    errors,
+                }),
+            }),
+        )
+            .into_response();
+    }
+
+    let mut tx = match state.db.begin().await {
+        Ok(tx) => tx,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<ImportProdukResponse> {
+                    status: "error".to_string(),
+                    message: format!("Gagal memulai transaksi impor: {error}"),
+                    data: None,
+                }),
+            )
+                .into_response()
+        }
+    };
+
+    let mut produk_ids = Vec::with_capacity(payload.rows.len());
+    for row in &payload.rows {
+        let min_stok = row.min_stok.unwrap_or(5);
+        let inserted: Result<(i32,), sqlx::Error> = sqlx::query_as(
+            "INSERT INTO products (owner_id, sku, nama, kategori, harga_beli, harga_jual, satuan, created_at)
+             VALUES ($1, $2, $3, 'Umum', $4, $5, 'pcs', now())
+             RETURNING id",
+        )
+        .bind(claims.owner_id as i32)
+        .bind(row.sku.trim())
+        .bind(row.nama.trim())
+        .bind(rust_decimal::Decimal::from_f64_retain(row.harga_beli).unwrap_or_default())
+        .bind(rust_decimal::Decimal::from_f64_retain(row.harga_jual).unwrap_or_default())
+        .fetch_one(&mut *tx)
+        .await;
+        let prod_id = match inserted {
+            Ok((id,)) => id,
+            Err(error) => {
+                let _ = tx.rollback().await;
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiResponse::<ImportProdukResponse> {
+                        status: "error".to_string(),
+                        message: format!("Impor dibatalkan: {error}"),
+                        data: None,
+                    }),
+                )
+                    .into_response();
+            }
+        };
+        if let Err(error) = sqlx::query(
+            "INSERT INTO inventories (unit_id, product_id, qty, min_stock, created_at)
+             VALUES ($1, $2, $3, $4, now())",
+        )
+        .bind(payload.unit_id as i32)
+        .bind(prod_id)
+        .bind(row.stok)
+        .bind(min_stok)
+        .execute(&mut *tx)
+        .await
+        {
+            let _ = tx.rollback().await;
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<ImportProdukResponse> {
+                    status: "error".to_string(),
+                    message: format!("Impor dibatalkan saat menyimpan stok: {error}"),
+                    data: None,
+                }),
+            )
+                .into_response();
+        }
+        produk_ids.push(prod_id as i64);
+    }
+
+    if let Err(error) = tx.commit().await {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<ImportProdukResponse> {
+                status: "error".to_string(),
+                message: format!("Gagal menyelesaikan impor: {error}"),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
+
+    let jumlah = produk_ids.len();
+    (
+        StatusCode::CREATED,
+        Json(ApiResponse::<ImportProdukResponse> {
+            status: "success".to_string(),
+            message: format!("{jumlah} produk berhasil diimpor."),
+            data: Some(ImportProdukResponse {
+                berhasil: jumlah,
+                gagal: 0,
+                produk_ids,
+                errors: Vec::new(),
+            }),
         }),
     )
         .into_response()

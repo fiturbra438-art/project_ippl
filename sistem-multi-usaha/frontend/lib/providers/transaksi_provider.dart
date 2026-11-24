@@ -62,6 +62,116 @@ class TransaksiProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  TransaksiDetailModel? _detail;
+  TransaksiDetailModel? get detail => _detail;
+
+  TransaksiDetailModel _parseDetail(Map<String, dynamic> data) {
+    final items = (data['items'] as List? ?? []).map((raw) {
+      final m = Map<String, dynamic>.from(raw as Map);
+      return TransaksiItemDetail(
+        id: (m['id'] as num).toInt(),
+        productId: (m['product_id'] as num?)?.toInt(),
+        itemName: m['item_name'] as String? ?? '-',
+        itemType: m['item_type'] as String? ?? 'barang',
+        qty: (m['qty'] as num?)?.toInt() ?? 0,
+        hargaSatuan: (m['harga_satuan'] as num?)?.toDouble() ?? 0,
+        subtotal: (m['subtotal'] as num?)?.toDouble() ?? 0,
+        refundedQty: (m['refunded_qty'] as num?)?.toInt() ?? 0,
+        refundableQty: (m['refundable_qty'] as num?)?.toInt() ?? 0,
+      );
+    }).toList();
+
+    final refunds = (data['refunds'] as List? ?? []).map((raw) {
+      final m = Map<String, dynamic>.from(raw as Map);
+      final refundItems = (m['items'] as List? ?? []).map((riRaw) {
+        final ri = Map<String, dynamic>.from(riRaw as Map);
+        return RefundItemModel(
+          transactionItemId: (ri['transaction_item_id'] as num?)?.toInt() ?? 0,
+          productId: (ri['product_id'] as num?)?.toInt(),
+          itemName: ri['item_name'] as String? ?? '-',
+          itemType: ri['item_type'] as String? ?? 'barang',
+          qty: (ri['qty'] as num?)?.toInt() ?? 0,
+          jumlah: (ri['jumlah'] as num?)?.toDouble() ?? 0,
+        );
+      }).toList();
+      return RefundModel(
+        id: (m['id'] as num?)?.toInt() ?? 0,
+        transactionId: (m['transaction_id'] as num?)?.toInt() ?? 0,
+        unitId: (m['unit_id'] as num?)?.toInt() ?? 0,
+        jenis: m['jenis'] as String? ?? 'refund',
+        alasan: m['alasan'] as String? ?? '',
+        jumlah: (m['jumlah'] as num?)?.toDouble() ?? 0,
+        aktor: m['aktor'] as String? ?? '-',
+        createdAt: DateTime.tryParse(m['created_at']?.toString() ?? '') ?? DateTime.now(),
+        items: refundItems,
+      );
+    }).toList();
+
+    return TransaksiDetailModel(
+      id: (data['id'] as num?)?.toInt() ?? 0,
+      unitId: (data['unit_id'] as num?)?.toInt() ?? 0,
+      namaUnit: data['nama_unit'] as String? ?? 'Unit Usaha',
+      tanggal: DateTime.tryParse(data['tanggal']?.toString() ?? '') ?? DateTime.now(),
+      total: (data['total'] as num?)?.toDouble() ?? 0,
+      metodeBayar: data['metode_bayar'] as String? ?? '-',
+      status: data['status'] as String? ?? '-',
+      customerName: data['customer_name'] as String?,
+      notes: data['notes'] as String?,
+      items: items,
+      refunds: refunds,
+      refundedTotal: (data['refunded_total'] as num?)?.toDouble() ?? 0,
+      refundableTotal: (data['refundable_total'] as num?)?.toDouble() ?? 0,
+    );
+  }
+
+  Future<TransaksiDetailModel?> fetchTransaksiDetail(int id) async {
+    _lastError = null;
+    try {
+      final res = await ApiService.get('/transaksi/$id');
+      if (res != null && res['status'] == 'success' && res['data'] is Map) {
+        _detail = _parseDetail(Map<String, dynamic>.from(res['data'] as Map));
+        notifyListeners();
+        return _detail;
+      }
+      _lastError = res?['message'] as String? ?? 'Gagal memuat detail transaksi.';
+    } catch (e) {
+      debugPrint('TransaksiProvider.fetchTransaksiDetail error: $e');
+      _lastError = 'Gagal memuat detail transaksi: $e';
+    }
+    notifyListeners();
+    return null;
+  }
+
+  Future<bool> ajukanRefund({
+    required int id,
+    required String alasan,
+    bool voidMode = false,
+    Map<int, int> items = const {},
+  }) async {
+    _lastError = null;
+    try {
+      final res = await ApiService.post('/transaksi/$id/refund', {
+        'alasan': alasan,
+        'void': voidMode,
+        'items': items.entries
+            .map((entry) => {'transaction_item_id': entry.key, 'qty': entry.value})
+            .toList(),
+      });
+      if (res != null && res['status'] == 'success') {
+        await fetchTransaksiDetail(id);
+        final unitId = _detail?.unitId;
+        await fetchTransaksiFromApi(unitId: unitId);
+        return true;
+      }
+      _lastError = res?['message'] as String? ?? 'Gagal memproses refund.';
+    } catch (e) {
+      debugPrint('TransaksiProvider.ajukanRefund error: $e');
+      _lastError = 'Gagal memproses refund: $e';
+    }
+    notifyListeners();
+    return false;
+  }
+
   Future<bool> catatTransaksiManual({
     required int unitId,
     required JenisTransaksi jenis,

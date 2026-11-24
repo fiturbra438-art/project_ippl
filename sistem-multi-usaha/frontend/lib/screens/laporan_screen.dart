@@ -3,6 +3,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/laporan_provider.dart';
 import '../providers/usaha_provider.dart';
+import '../services/laporan_csv.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
 import '../widgets/app_sidebar.dart';
@@ -45,9 +46,9 @@ class _LaporanScreenState extends State<LaporanScreen> {
               title: const Text('Laporan Finansial', style: TextStyle(color: AppTheme.primaryBlue, fontWeight: FontWeight.bold)),
               actions: [
                 IconButton(
-                  tooltip: 'Ekspor belum tersedia',
-                  icon: const Icon(Icons.download_rounded, color: AppTheme.textMuted),
-                  onPressed: null,
+                  tooltip: 'Ekspor CSV',
+                  icon: const Icon(Icons.download_rounded, color: AppTheme.primaryBlue),
+                  onPressed: () => _exportCsv(context),
                 ),
               ],
             )
@@ -105,13 +106,10 @@ class _LaporanScreenState extends State<LaporanScreen> {
             Text('Konsolidasi pemasukan, beban operasional, dan kontribusi laba lintas unit.', style: TextStyle(fontSize: 14, color: AppTheme.textSecondary)),
           ],
         ),
-        Tooltip(
-          message: 'Ekspor CSV/PDF/Excel belum tersedia',
-          child: ElevatedButton.icon(
-            onPressed: null,
-            icon: const Icon(Icons.file_download_outlined, size: 18),
-            label: const Text('Ekspor belum tersedia'),
-          ),
+        ElevatedButton.icon(
+          onPressed: () => _exportCsv(context),
+          icon: const Icon(Icons.file_download_outlined, size: 18),
+          label: const Text('Ekspor CSV'),
         ),
       ],
     );
@@ -216,6 +214,39 @@ class _LaporanScreenState extends State<LaporanScreen> {
           metodePembayaran: _metodePembayaran,
           statusTransaksi: _statusTransaksi,
         );
+  }
+
+  void _exportCsv(BuildContext context) {
+    final provider = context.read<LaporanProvider>();
+    final units = context.read<UsahaProvider>().daftarUsaha;
+    var unitName = _unitId == null ? 'Semua unit' : 'Unit $_unitId';
+    if (_unitId != null) {
+      for (final unit in units) {
+        if (unit.id == _unitId) {
+          unitName = unit.nama;
+          break;
+        }
+      }
+    }
+    final periode = _tanggalMulai == null && _tanggalAkhir == null
+        ? 'Semua periode'
+        : '${_tanggalMulai == null ? '-' : DateFormat('yyyy-MM-dd').format(_tanggalMulai!)} s/d ${_tanggalAkhir == null ? '-' : DateFormat('yyyy-MM-dd').format(_tanggalAkhir!)}';
+    final stamp = DateFormat('yyyyMMdd-HHmm').format(DateTime.now());
+    try {
+      exportLaporanCsv(
+        'laporan-keuangan-$stamp.csv',
+        buildLaporanCsv(provider.summary, periode: periode, unit: unitName),
+      );
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Ekspor CSV berhasil.')),
+      );
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Ekspor gagal: $error')),
+      );
+    }
   }
 
   Widget _buildError(BuildContext context) {

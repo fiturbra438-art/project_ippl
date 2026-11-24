@@ -13,64 +13,71 @@ impl AppState {
         // Akun owner harus dibuat melalui proses registrasi yang tersimpan di DB.
 
         // 1. Tambahkan kolom owner_id pada tabel users jika belum ada (multi-tenant support)
-        let _ = sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_id INT REFERENCES users(id) ON DELETE CASCADE")
+        sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS owner_id INT REFERENCES users(id) ON DELETE CASCADE")
             .execute(&pool)
-            .await;
+            .await.expect("Migrasi database gagal");
 
         // 1b. Tambahkan kolom dynamic OTP dan masa kedaluwarsa pada tabel users
-        let _ = sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_code VARCHAR(10)")
+        sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_code VARCHAR(10)")
             .execute(&pool)
-            .await;
-        let _ = sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_expires_at TIMESTAMP")
+            .await
+            .expect("Migrasi database gagal");
+        sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_expires_at TIMESTAMP")
             .execute(&pool)
-            .await;
-        let _ = sqlx::query(
+            .await
+            .expect("Migrasi database gagal");
+        sqlx::query(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_attempts INT NOT NULL DEFAULT 0",
         )
         .execute(&pool)
-        .await;
+        .await
+        .expect("Migrasi database gagal");
 
         // 1c. Migrasi skema kasir fleksibel (Rental, Jasa, Custom Note & Duration) pada tabel transactions & transaction_items
-        let _ = sqlx::query(
-            "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS customer_name VARCHAR(150)",
-        )
-        .execute(&pool)
-        .await;
-        let _ = sqlx::query("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS notes TEXT")
+        sqlx::query("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS customer_name VARCHAR(150)")
             .execute(&pool)
-            .await;
-        let _ = sqlx::query("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS operation_mode VARCHAR(30) DEFAULT 'fleksibel'")
+            .await
+            .expect("Migrasi database gagal");
+        sqlx::query("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS notes TEXT")
             .execute(&pool)
-            .await;
+            .await
+            .expect("Migrasi database gagal");
+        sqlx::query("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS operation_mode VARCHAR(30) DEFAULT 'fleksibel'")
+            .execute(&pool)
+            .await.expect("Migrasi database gagal");
 
-        let _ = sqlx::query("ALTER TABLE transaction_items ALTER COLUMN product_id DROP NOT NULL")
+        sqlx::query("ALTER TABLE transaction_items ALTER COLUMN product_id DROP NOT NULL")
             .execute(&pool)
-            .await;
-        let _ = sqlx::query(
+            .await
+            .expect("Migrasi database gagal");
+        sqlx::query(
             "ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS item_name VARCHAR(150)",
         )
         .execute(&pool)
-        .await;
-        let _ = sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS item_type VARCHAR(30) DEFAULT 'barang'")
+        .await
+        .expect("Migrasi database gagal");
+        sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS item_type VARCHAR(30) DEFAULT 'barang'")
             .execute(&pool)
-            .await;
-        let _ = sqlx::query(
+            .await.expect("Migrasi database gagal");
+        sqlx::query(
             "ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS rental_duration INT DEFAULT 1",
         )
         .execute(&pool)
-        .await;
-        let _ = sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS duration_unit VARCHAR(20) DEFAULT 'jam'")
+        .await
+        .expect("Migrasi database gagal");
+        sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS duration_unit VARCHAR(20) DEFAULT 'jam'")
             .execute(&pool)
-            .await;
-        let _ = sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS notes TEXT")
+            .await.expect("Migrasi database gagal");
+        sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS notes TEXT")
             .execute(&pool)
-            .await;
-        let _ = sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS diskon NUMERIC(14,2) NOT NULL DEFAULT 0")
+            .await
+            .expect("Migrasi database gagal");
+        sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS diskon NUMERIC(14,2) NOT NULL DEFAULT 0")
             .execute(&pool)
-            .await;
+            .await.expect("Migrasi database gagal");
 
         // 1d. Tabel Lifecycle Rental & Jasa (Active Orders, Status Pengerjaan & Pengembalian Sewa)
-        let _ = sqlx::query(
+        sqlx::query(
             "CREATE TABLE IF NOT EXISTS rental_service_orders (
                 id SERIAL PRIMARY KEY,
                 trx_id INT NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
@@ -94,83 +101,88 @@ impl AppState {
             )",
         )
         .execute(&pool)
-        .await;
+        .await
+        .expect("Migrasi database gagal");
 
-        let _ = sqlx::query("CREATE INDEX IF NOT EXISTS ix_rental_service_unit_status ON rental_service_orders(unit_id, status)")
+        sqlx::query("CREATE INDEX IF NOT EXISTS ix_rental_service_unit_status ON rental_service_orders(unit_id, status)")
             .execute(&pool)
-            .await;
-        let _ = sqlx::query("CREATE INDEX IF NOT EXISTS ix_rental_service_product_active ON rental_service_orders(product_id, status)")
+            .await.expect("Migrasi database gagal");
+        sqlx::query("CREATE INDEX IF NOT EXISTS ix_rental_service_product_active ON rental_service_orders(product_id, status)")
             .execute(&pool)
-            .await;
-        let _ = sqlx::query(
+            .await.expect("Migrasi database gagal");
+        sqlx::query(
             "ALTER TABLE rental_service_orders ADD COLUMN IF NOT EXISTS qty INT NOT NULL DEFAULT 1",
         )
         .execute(&pool)
-        .await;
+        .await
+        .expect("Migrasi database gagal");
 
         // 1e. Status & waktu terima untuk mutasi transfer stok
-        let _ = sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'diterima'")
+        sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'diterima'")
             .execute(&pool)
-            .await;
-        let _ = sqlx::query(
-            "ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS waktu_terima TIMESTAMP",
-        )
-        .execute(&pool)
-        .await;
-        let _ = sqlx::query(
+            .await.expect("Migrasi database gagal");
+        sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS waktu_terima TIMESTAMP")
+            .execute(&pool)
+            .await
+            .expect("Migrasi database gagal");
+        sqlx::query(
             "ALTER TABLE inventories ADD COLUMN IF NOT EXISTS reserved_qty INT NOT NULL DEFAULT 0",
         )
         .execute(&pool)
-        .await;
-        let _ = sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS diminta_oleh INT REFERENCES users(id) ON DELETE SET NULL")
+        .await
+        .expect("Migrasi database gagal");
+        sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS diminta_oleh INT REFERENCES users(id) ON DELETE SET NULL")
             .execute(&pool)
-            .await;
-        let _ = sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS disetujui_oleh INT REFERENCES users(id) ON DELETE SET NULL")
+            .await.expect("Migrasi database gagal");
+        sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS disetujui_oleh INT REFERENCES users(id) ON DELETE SET NULL")
             .execute(&pool)
-            .await;
-        let _ = sqlx::query(
+            .await.expect("Migrasi database gagal");
+        sqlx::query(
             "ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS waktu_persetujuan TIMESTAMP",
         )
         .execute(&pool)
-        .await;
-        let _ = sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS dikirim_oleh INT REFERENCES users(id) ON DELETE SET NULL")
+        .await
+        .expect("Migrasi database gagal");
+        sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS dikirim_oleh INT REFERENCES users(id) ON DELETE SET NULL")
             .execute(&pool)
-            .await;
-        let _ = sqlx::query(
+            .await.expect("Migrasi database gagal");
+        sqlx::query(
             "ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS waktu_pengiriman TIMESTAMP",
         )
         .execute(&pool)
-        .await;
-        let _ = sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS diterima_oleh INT REFERENCES users(id) ON DELETE SET NULL")
+        .await
+        .expect("Migrasi database gagal");
+        sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS diterima_oleh INT REFERENCES users(id) ON DELETE SET NULL")
             .execute(&pool)
-            .await;
-        let _ = sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS ditolak_oleh INT REFERENCES users(id) ON DELETE SET NULL")
+            .await.expect("Migrasi database gagal");
+        sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS ditolak_oleh INT REFERENCES users(id) ON DELETE SET NULL")
             .execute(&pool)
-            .await;
-        let _ = sqlx::query(
+            .await.expect("Migrasi database gagal");
+        sqlx::query(
             "ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS waktu_penolakan TIMESTAMP",
         )
         .execute(&pool)
-        .await;
-        let _ = sqlx::query(
-            "ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS alasan_penolakan TEXT",
-        )
-        .execute(&pool)
-        .await;
-        let _ = sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS dibatalkan_oleh INT REFERENCES users(id) ON DELETE SET NULL")
+        .await
+        .expect("Migrasi database gagal");
+        sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS alasan_penolakan TEXT")
             .execute(&pool)
-            .await;
-        let _ = sqlx::query(
+            .await
+            .expect("Migrasi database gagal");
+        sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS dibatalkan_oleh INT REFERENCES users(id) ON DELETE SET NULL")
+            .execute(&pool)
+            .await.expect("Migrasi database gagal");
+        sqlx::query(
             "ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS waktu_pembatalan TIMESTAMP",
         )
         .execute(&pool)
-        .await;
+        .await
+        .expect("Migrasi database gagal");
 
         // 1f. Kolom periode_omzet dan sinkronisasi casing kategori_portofolio di business_units
-        let _ = sqlx::query("ALTER TABLE business_units ADD COLUMN IF NOT EXISTS periode_omzet VARCHAR(7) NOT NULL DEFAULT to_char(CURRENT_DATE, 'YYYY-MM')")
+        sqlx::query("ALTER TABLE business_units ADD COLUMN IF NOT EXISTS periode_omzet VARCHAR(7) NOT NULL DEFAULT to_char(CURRENT_DATE, 'YYYY-MM')")
             .execute(&pool)
-            .await;
-        let _ = sqlx::query(
+            .await.expect("Migrasi database gagal");
+        sqlx::query(
             "UPDATE business_units SET kategori_portofolio = CASE LOWER(kategori_portofolio)
                 WHEN 'star' THEN 'Star'
                 WHEN 'cash_cow' THEN 'Cash Cow'
@@ -182,10 +194,11 @@ impl AppState {
             END",
         )
         .execute(&pool)
-        .await;
+        .await
+        .expect("Migrasi database gagal");
 
         // Reset omzet bulanan jika periode_omzet berbeda dengan bulan berjalan
-        let _ = sqlx::query(
+        sqlx::query(
             "UPDATE business_units
              SET pendapatan_bulan_ini = 0,
                  pengeluaran_bulan_ini = 0,
@@ -193,7 +206,8 @@ impl AppState {
              WHERE COALESCE(periode_omzet, '') <> to_char(CURRENT_DATE, 'YYYY-MM')",
         )
         .execute(&pool)
-        .await;
+        .await
+        .expect("Migrasi database gagal");
 
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS transaction_refunds (
@@ -245,7 +259,7 @@ impl AppState {
         .expect("Gagal membuat index transaction_refund_items");
 
         // Perbarui trigger fungsi omzet agar otomatis me-reset di pergantian bulan
-        let _ = sqlx::query(
+        sqlx::query(
             "CREATE OR REPLACE FUNCTION trg_fn_update_omzet_unit() 
             RETURNS TRIGGER AS $$
             DECLARE
@@ -271,7 +285,7 @@ impl AppState {
             $$ LANGUAGE plpgsql;"
         )
         .execute(&pool)
-        .await;
+        .await.expect("Migrasi database gagal");
 
         let jwt_secret = std::env::var("JWT_SECRET")
             .expect("JWT_SECRET wajib diatur dan tidak boleh memakai secret default");

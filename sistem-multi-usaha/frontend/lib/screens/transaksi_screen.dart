@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../models/transaksi.dart';
+import '../models/user_model.dart';
 import '../providers/transaksi_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/usaha_provider.dart';
@@ -224,19 +225,193 @@ class _TransaksiScreenState extends State<TransaksiScreen> {
                   ],
                 ),
               ),
-              Text(
-                '${isIncome ? '+' : '-'}${currency.format(item.jumlah)}',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                  color: isIncome ? AppTheme.accentGreen : const Color(0xFFEF4444),
-                ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    '${isIncome ? '+' : '-'}${currency.format(item.jumlah)}',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: isIncome ? AppTheme.accentGreen : const Color(0xFFEF4444),
+                    ),
+                  ),
+                  if (item.kategori == 'Penjualan POS' && _canRefund(context))
+                    TextButton(
+                      onPressed: () => _showRefundDialog(context, item),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        minimumSize: const Size(0, 28),
+                      ),
+                      child: const Text('Refund', style: TextStyle(fontSize: 12)),
+                    ),
+                ],
               ),
             ],
           ),
         );
       },
     );
+  }
+
+  bool _canRefund(BuildContext context) {
+    final role = context.watch<AuthProvider>().currentUser?.role;
+    return role == UserRole.owner || role == UserRole.manager;
+  }
+
+  Future<void> _showRefundDialog(BuildContext context, TransaksiModel transaksi) async {
+    final provider = context.read<TransaksiProvider>();
+    final detail = await provider.fetchTransaksiDetail(transaksi.id);
+    if (!context.mounted) return;
+    if (detail == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(provider.lastError ?? 'Gagal memuat detail transaksi.')),
+      );
+      return;
+    }
+
+    final alasanCtrl = TextEditingController();
+    final qtyCtrls = <int, TextEditingController>{
+      for (final item in detail.items)
+        if (item.refundableQty > 0) item.id: TextEditingController(text: '0'),
+    };
+    var voidMode = false;
+    var submitting = false;
+    final currency = NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocalState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Text('Refund Transaksi #${transaksi.id}'),
+          content: SizedBox(
+            width: 460,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Total transaksi ${currency.format(detail.total)} • Sudah direfund ${currency.format(detail.refundedTotal)} • Sisa ${currency.format(detail.refundableTotal)}',
+                    style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                  ),
+                  const SizedBox(height: 12),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Void / refund penuh sisa transaksi'),
+                    subtitle: const Text('Semua item yang belum direfund akan diproses.'),
+                    value: voidMode,
+                    onChanged: submitting
+                        ? null
+                        : (value) => setLocalState(() => voidMode = value),
+                  ),
+                  if (!voidMode) ...[
+                    const SizedBox(height: 8),
+                    const Text('Pilih jumlah item yang direfund:', style: TextStyle(fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 8),
+                    ...detail.items.map((item) {
+                      if (item.refundableQty <= 0) {
+                        return ListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(item.itemName),
+                          subtitle: Text('Sudah direfund penuh (${item.refundedQty}/${item.qty})'),
+                        );
+                      }
+                      return Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${item.itemName} (${item.itemType}) • sisa ${item.refundableQty}',
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 80,
+                            child: TextField(
+                              controller: qtyCtrls[item.id],
+                              keyboardType: TextInputType.number,
+                              enabled: !submitting,
+                              decoration: const InputDecoration(labelText: 'Qty', isDense: true),
+                            ),
+                          ),
+                        ],
+                      );
+                    }),
+                  ],
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: alasanCtrl,
+                    enabled: !submitting,
+                    decoration: const InputDecoration(
+                      labelText: 'Alasan refund (wajib)',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: submitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Batal'),
+            ),
+            ElevatedButton(
+              onPressed: submitting
+                  ? null
+                  : () async {
+                      final alasan = alasanCtrl.text.trim();
+                      if (alasan.isEmpty) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Alasan refund wajib diisi.')),
+                        );
+                        return;
+                      }
+                      final items = <int, int>{};
+                      if (!voidMode) {
+                        for (final entry in qtyCtrls.entries) {
+                          final qty = int.tryParse(entry.value.text.trim()) ?? 0;
+                          if (qty > 0) items[entry.key] = qty;
+                        }
+                        if (items.isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Pilih minimal satu item dengan qty > 0.')),
+                          );
+                          return;
+                        }
+                      }
+                      setLocalState(() => submitting = true);
+                      final ok = await provider.ajukanRefund(
+                        id: transaksi.id,
+                        alasan: alasan,
+                        voidMode: voidMode,
+                        items: items,
+                      );
+                      if (!ctx.mounted) return;
+                      setLocalState(() => submitting = false);
+                      if (ok) Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            ok
+                                ? 'Refund berhasil diproses.'
+                                : (provider.lastError ?? 'Gagal memproses refund.'),
+                          ),
+                        ),
+                      );
+                    },
+              child: Text(submitting ? 'Memproses...' : 'Proses Refund'),
+            ),
+          ],
+        ),
+      ),
+    );
+    for (final controller in qtyCtrls.values) {
+      controller.dispose();
+    }
+    alasanCtrl.dispose();
   }
 
   void _showTambahTransaksiDialog(BuildContext context) {

@@ -114,6 +114,36 @@ class ProdukProvider extends ChangeNotifier {
     return false;
   }
 
+  Future<String?> importProdukBatch(int unitId, List<Map<String, dynamic>> rows) async {
+    _lastError = null;
+    try {
+      final res = await ApiService.post('/produk/import', {
+        'unit_id': unitId,
+        'rows': rows,
+      });
+      if (res != null && res['status'] == 'success') {
+        await fetchProdukFromApi(unitId: unitId);
+        return null;
+      }
+      final data = res?['data'];
+      if (data is Map && data['errors'] is List && (data['errors'] as List).isNotEmpty) {
+        final messages = (data['errors'] as List)
+            .take(5)
+            .map((error) => 'Baris ${error['baris']}: ${error['pesan']}')
+            .join('\n');
+        _lastError = messages;
+        return messages;
+      }
+      final message = res?['message'] as String? ?? 'Gagal mengimpor produk.';
+      _lastError = message;
+      return message;
+    } catch (e) {
+      debugPrint('ProdukProvider.importProdukBatch error: $e');
+      _lastError = 'Gagal mengimpor produk: $e';
+      return _lastError;
+    }
+  }
+
   void tambahProduk(ProdukModel produk) {
     _daftarProduk.add(produk);
     notifyListeners();

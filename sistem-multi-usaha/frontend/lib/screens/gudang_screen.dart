@@ -7,6 +7,7 @@ import '../providers/auth_provider.dart';
 import '../providers/gudang_provider.dart';
 import '../providers/produk_provider.dart';
 import '../providers/usaha_provider.dart';
+import '../services/csv_import_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
 import '../widgets/app_navigator.dart';
@@ -69,7 +70,7 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
           TextButton.icon(
             onPressed: () => _showImportDialog(context),
             icon: const Icon(Icons.upload_file_rounded, size: 18, color: AppTheme.primaryBlue),
-            label: const Text('Impor CSV (segera)', style: TextStyle(color: AppTheme.primaryBlue, fontWeight: FontWeight.bold)),
+            label: const Text('Impor CSV', style: TextStyle(color: AppTheme.primaryBlue, fontWeight: FontWeight.bold)),
           ),
           if (isAdminGudang)
             IconButton(
@@ -462,39 +463,117 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
     );
   }
 
-  void _showImportDialog(BuildContext context) {
-    showDialog(
+  Future<void> _showImportDialog(BuildContext context) async {
+    final unitId = context.read<AuthProvider>().selectedUnitId;
+    final produkProvider = context.read<ProdukProvider>();
+    var rows = <CsvImportRow>[];
+    var errors = <CsvParseError>[];
+    String? fileName;
+    String? submitError;
+    var busy = false;
+
+    await showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Impor produk belum tersedia', style: TextStyle(fontWeight: FontWeight.bold)),
-        content: SizedBox(
-          width: 380,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: AppTheme.lightBlueBg,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppTheme.secondaryBlue.withAlpha(40), style: BorderStyle.solid),
-                ),
-                child: Column(
-                  children: const [
-                    Icon(Icons.file_upload_outlined, size: 40, color: AppTheme.primaryBlue),
-                    SizedBox(height: 8),
-                    Text('Import dinonaktifkan sampai pemilih file, validasi, dan penyimpanan batch tersedia.', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13), textAlign: TextAlign.center),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocalState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Impor Produk & Stok (CSV)', style: TextStyle(fontWeight: FontWeight.bold)),
+          content: SizedBox(
+            width: 460,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Format kolom: SKU, Nama, Harga Beli, Harga Jual, Stok, Min Stok (opsional). Semua baris harus valid; impor bersifat all-or-nothing.',
+                    style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: busy
+                        ? null
+                        : () async {
+                            setLocalState(() {
+                              busy = true;
+                              submitError = null;
+                            });
+                            final text = await pickCsvFile();
+                            if (!ctx.mounted) return;
+                            if (text == null) {
+                              setLocalState(() => busy = false);
+                              return;
+                            }
+                            final parsed = parseProdukCsv(text);
+                            setLocalState(() {
+                              rows = parsed.rows;
+                              errors = parsed.errors;
+                              fileName = 'File CSV dipilih';
+                              busy = false;
+                            });
+                          },
+                    icon: const Icon(Icons.file_upload_outlined),
+                    label: Text(busy ? 'Membaca file...' : 'Pilih file CSV'),
+                  ),
+                  if (fileName != null) ...[
+                    const SizedBox(height: 8),
+                    Text(fileName!, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
                   ],
-                ),
+                  if (rows.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text('${rows.length} baris siap diimpor:', style: const TextStyle(fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 4),
+                    ...rows.take(5).map((row) => Text('• ${row.sku} — ${row.nama} (${row.stok})', style: const TextStyle(fontSize: 12))),
+                    if (rows.length > 5) const Text('...', style: TextStyle(fontSize: 12)),
+                  ],
+                  if (errors.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    const Text('Kesalahan validasi:', style: TextStyle(color: Color(0xFFDC2626), fontWeight: FontWeight.w600)),
+                    ...errors.take(8).map((error) => Text('Baris ${error.baris}: ${error.pesan}', style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626)))),
+                    if (errors.length > 8) Text('... dan ${errors.length - 8} kesalahan lain', style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626))),
+                  ],
+                  if (submitError != null) ...[
+                    const SizedBox(height: 8),
+                    Text(submitError!, style: const TextStyle(fontSize: 12, color: Color(0xFFDC2626))),
+                  ],
+                  if (unitId == null) ...[
+                    const SizedBox(height: 8),
+                    const Text('Pilih unit usaha terlebih dahulu sebelum mengimpor.', style: TextStyle(fontSize: 12, color: Color(0xFFDC2626))),
+                  ],
+                ],
               ),
-            ],
+            ),
           ),
+          actions: [
+            TextButton(onPressed: busy ? null : () => Navigator.pop(ctx), child: const Text('Batal')),
+            ElevatedButton(
+              onPressed: (busy || unitId == null || rows.isEmpty || errors.isNotEmpty)
+                  ? null
+                  : () async {
+                      setLocalState(() {
+                        busy = true;
+                        submitError = null;
+                      });
+                      final error = await produkProvider.importProdukBatch(
+                        unitId,
+                        rows.map((row) => row.toJson()).toList(),
+                      );
+                      if (!ctx.mounted) return;
+                      setLocalState(() {
+                        busy = false;
+                        submitError = error;
+                      });
+                      if (error == null) {
+                        Navigator.pop(ctx);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('${rows.length} produk berhasil diimpor.')),
+                        );
+                      }
+                    },
+              child: Text(busy ? 'Mengimpor...' : 'Impor'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
-          const ElevatedButton(onPressed: null, child: Text('Impor dinonaktifkan')),
-        ],
       ),
     );
   }

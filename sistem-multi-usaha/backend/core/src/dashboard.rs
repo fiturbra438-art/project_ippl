@@ -132,6 +132,17 @@ pub async fn get_dashboard_summary(
         .await
         .unwrap_or(None);
         let pendapatan_pos = p_decimal.and_then(|d| d.to_f64()).unwrap_or(0.0);
+        let refund_unit: Option<rust_decimal::Decimal> = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(r.jumlah), 0)
+             FROM transaction_refunds r
+             JOIN transactions t ON t.id = r.transaction_id
+             WHERE t.unit_id = $1",
+        )
+        .bind(u.0)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
+        let refund = refund_unit.and_then(|d| d.to_f64()).unwrap_or(0.0);
 
         // Pendapatan & pengeluaran manual dari tabel cash_flows
         let cash_masuk: Option<rust_decimal::Decimal> = sqlx::query_scalar(
@@ -149,7 +160,8 @@ pub async fn get_dashboard_summary(
         .await
         .unwrap_or(None);
 
-        let pendapatan = pendapatan_pos + cash_masuk.and_then(|d| d.to_f64()).unwrap_or(0.0);
+        let pendapatan =
+            (pendapatan_pos - refund) + cash_masuk.and_then(|d| d.to_f64()).unwrap_or(0.0);
         let pengeluaran = cash_keluar.and_then(|d| d.to_f64()).unwrap_or(0.0);
         let laba = pendapatan - pengeluaran;
         let margin = if pendapatan > 0.0 {
@@ -343,6 +355,61 @@ pub async fn get_laporan_keuangan(
                 .into_response()
         }
     };
+    let refund_rows = sqlx::query_as::<_, (rust_decimal::Decimal, rust_decimal::Decimal)>(
+        "SELECT
+            COALESCE((SELECT SUM(r.jumlah)
+                      FROM transaction_refunds r
+                      JOIN transactions t ON t.id = r.transaction_id
+                      JOIN business_units u ON u.id = t.unit_id
+                      WHERE u.owner_id = $1
+                        AND ($2::INT IS NULL OR t.unit_id = $2)
+                        AND ($3::DATE IS NULL OR r.created_at >= $3::DATE)
+                        AND ($4::DATE IS NULL OR r.created_at < ($4::DATE + INTERVAL '1 day'))
+                        AND ($5::TEXT IS NULL OR t.metode_bayar = $5)
+                        AND ($6::TEXT IS NULL OR t.status = $6)
+                        AND ($7::INT[] IS NULL OR t.unit_id = ANY($7))), 0),
+            COALESCE((SELECT SUM(p.harga_beli * ri.qty)
+                      FROM transaction_refund_items ri
+                      JOIN transaction_refunds r ON r.id = ri.refund_id
+                      JOIN transactions t ON t.id = r.transaction_id
+                      JOIN business_units u ON u.id = t.unit_id
+                      LEFT JOIN products p ON p.id = ri.product_id
+                      WHERE u.owner_id = $1
+                        AND ($2::INT IS NULL OR t.unit_id = $2)
+                        AND ($3::DATE IS NULL OR r.created_at >= $3::DATE)
+                        AND ($4::DATE IS NULL OR r.created_at < ($4::DATE + INTERVAL '1 day'))
+                        AND ($5::TEXT IS NULL OR t.metode_bayar = $5)
+                        AND ($6::TEXT IS NULL OR t.status = $6)
+                        AND ($7::INT[] IS NULL OR t.unit_id = ANY($7))
+                        AND ri.item_type = 'barang'), 0)",
+    )
+    .bind(owner_id as i32)
+    .bind(query.unit_id.map(|unit_id| unit_id as i32))
+    .bind(query.tanggal_mulai)
+    .bind(query.tanggal_akhir)
+    .bind(query.metode_pembayaran.as_deref())
+    .bind(selected_status)
+    .bind(scoped_ids.as_deref())
+    .fetch_one(&state.db)
+    .await;
+    let (refund_total, refund_hpp) = match refund_rows {
+        Ok((refund, refund_hpp)) => (
+            refund.to_f64().unwrap_or_default(),
+            refund_hpp.to_f64().unwrap_or_default(),
+        ),
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<LaporanKeuanganResponse> {
+                    status: "error".to_string(),
+                    message: format!("Gagal mengambil data refund laporan: {error}"),
+                    data: None,
+                }),
+            )
+                .into_response()
+        }
+    };
+
     let mut total_pengeluaran = 0.0;
     use std::collections::HashMap;
     let mut map_pemasukan: HashMap<String, f64> = HashMap::new();
@@ -360,7 +427,14 @@ pub async fn get_laporan_keuangan(
             .entry(format!("Penjualan ({})", metode))
             .or_insert(0.0) += jml;
     }
+    let penjualan_sebelum_refund = omzet_bersih;
+    let diskon = (omzet_kotor - penjualan_sebelum_refund).max(0.0);
+    let omzet_bersih = (penjualan_sebelum_refund - refund_total).max(0.0);
+    let hpp = (hpp - refund_hpp).max(0.0);
     let mut total_pemasukan = omzet_bersih;
+    if refund_total > 0.0 {
+        map_pemasukan.insert("Refund Penjualan".to_string(), -refund_total);
+    }
 
     for (jenis, kategori, jumlah) in cash_rows {
         let jml = jumlah.to_f64().unwrap_or(0.0);
@@ -387,8 +461,8 @@ pub async fn get_laporan_keuangan(
         total_pengeluaran,
         arus_kas_bersih: total_pemasukan - total_pengeluaran,
         omzet_kotor,
-        diskon: (omzet_kotor - omzet_bersih).max(0.0),
-        refund: 0.0,
+        diskon,
+        refund: refund_total,
         omzet_bersih,
         hpp,
         laba_kotor: omzet_bersih - hpp,

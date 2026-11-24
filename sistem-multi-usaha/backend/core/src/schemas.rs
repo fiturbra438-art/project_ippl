@@ -263,6 +263,39 @@ pub struct UpdateStatusTransferRequest {
     pub alasan: Option<String>,
 }
 
+// ==================== IMPOR PRODUK ====================
+
+#[derive(Debug, Deserialize)]
+pub struct ImportProdukRequest {
+    pub unit_id: i64,
+    pub rows: Vec<ImportProdukRow>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ImportProdukRow {
+    pub sku: String,
+    pub nama: String,
+    pub harga_beli: f64,
+    pub harga_jual: f64,
+    pub stok: i32,
+    #[serde(default)]
+    pub min_stok: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ImportProdukError {
+    pub baris: usize,
+    pub pesan: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ImportProdukResponse {
+    pub berhasil: usize,
+    pub gagal: usize,
+    pub produk_ids: Vec<i64>,
+    pub errors: Vec<ImportProdukError>,
+}
+
 // ==================== DASHBOARD & AI SCHEMAS ====================
 
 #[derive(Debug, Deserialize)]

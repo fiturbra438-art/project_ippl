@@ -106,6 +106,7 @@ async fn main() {
             get(produk::list_produk).post(produk::create_produk),
         )
         .route("/api/produk/low-stock", get(produk::list_low_stock))
+        .route("/api/produk/import", post(produk::import_produk))
         .route(
             "/api/produk/:id",
             get(produk::get_produk_detail)
@@ -125,6 +126,8 @@ async fn main() {
             "/api/transaksi",
             get(pos::list_transaksi).post(pos::create_transaksi_manual),
         )
+        .route("/api/transaksi/:id", get(pos::get_transaksi_detail))
+        .route("/api/transaksi/:id/refund", post(pos::refund_transaksi))
         // ==================== 5. MODUL GUDANG & PERMINTAAN STOK ====================
         .route(
             "/api/gudang/permintaan",

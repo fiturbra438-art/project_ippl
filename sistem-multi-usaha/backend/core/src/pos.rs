@@ -1217,15 +1217,14 @@ pub async fn refund_transaksi(
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-        let (unit_id, total_dec, status): (i32, rust_decimal::Decimal, String) =
-            sqlx::query_as(
-                "SELECT t.unit_id, t.total, t.status FROM transactions t
+        let (unit_id, total_dec, status): (i32, rust_decimal::Decimal, String) = sqlx::query_as(
+            "SELECT t.unit_id, t.total, t.status FROM transactions t
                  WHERE t.id = $1 FOR UPDATE",
-            )
-            .bind(id as i32)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        )
+        .bind(id as i32)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
         if status != "selesai" {
             return Err((
                 StatusCode::CONFLICT,
@@ -1374,8 +1373,7 @@ pub async fn refund_transaksi(
             ));
         }
 
-        let jumlah_dec =
-            rust_decimal::Decimal::from_f64_retain(total_refund).unwrap_or_default();
+        let jumlah_dec = rust_decimal::Decimal::from_f64_retain(total_refund).unwrap_or_default();
         let (refund_id, created_at): (i32, chrono::NaiveDateTime) = sqlx::query_as(
             "INSERT INTO transaction_refunds
              (transaction_id, owner_id, unit_id, jenis, status, alasan, jumlah, aktor_id, aktor)
@@ -2179,5 +2177,38 @@ pub async fn update_service_status(
             }),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod refund_tests {
+    use super::{hitung_nilai_refund, refund_masih_boleh};
+
+    #[test]
+    fn full_refund_matches_line_value() {
+        assert_eq!(hitung_nilai_refund(100_000.0, 2, 2, 1.0), 100_000.0);
+        assert_eq!(hitung_nilai_refund(100_000.0, 2, 2, 0.9), 90_000.0);
+    }
+
+    #[test]
+    fn partial_refund_is_rounded_to_two_decimals() {
+        assert_eq!(hitung_nilai_refund(10_000.0, 3, 1, 1.0), 3_333.33);
+        assert_eq!(hitung_nilai_refund(50_000.0, 2, 1, 1.0), 25_000.0);
+    }
+
+    #[test]
+    fn invalid_or_zero_refund_returns_zero() {
+        assert_eq!(hitung_nilai_refund(10_000.0, 0, 1, 1.0), 0.0);
+        assert_eq!(hitung_nilai_refund(10_000.0, 2, 0, 1.0), 0.0);
+        assert_eq!(hitung_nilai_refund(0.0, 2, 1, 1.0), 0.0);
+    }
+
+    #[test]
+    fn cumulative_refund_cannot_exceed_transaction_total() {
+        assert!(refund_masih_boleh(100.0, 40.0, 60.0));
+        assert!(refund_masih_boleh(100.0, 40.0, 60.005));
+        assert!(!refund_masih_boleh(100.0, 40.0, 60.02));
+        assert!(!refund_masih_boleh(100.0, 100.0, 1.0));
+        assert!(!refund_masih_boleh(100.0, 0.0, 0.0));
     }
 }
