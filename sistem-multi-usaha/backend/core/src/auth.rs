@@ -106,11 +106,15 @@ pub fn require_claims(
 }
 
 pub fn access_error(status: StatusCode) -> Response {
-    (status, Json(ApiResponse::<()> {
-        status: "error".to_string(),
-        message: "Akses ditolak atau validasi akses gagal.".to_string(),
-        data: None,
-    })).into_response()
+    (
+        status,
+        Json(ApiResponse::<()> {
+            status: "error".to_string(),
+            message: "Akses ditolak atau validasi akses gagal.".to_string(),
+            data: None,
+        }),
+    )
+        .into_response()
 }
 
 #[allow(clippy::result_large_err)]
@@ -118,9 +122,12 @@ pub async fn validate_claims(state: &AppState, mut claims: Claims) -> Result<Cla
     let account = sqlx::query_as::<_, (String, String, i64, Option<String>)>(
         "SELECT u.email, u.role, o.id::bigint, o.tier FROM users u
          JOIN users o ON o.id = CASE WHEN u.role = 'owner' THEN u.id ELSE u.owner_id END
-         WHERE u.id::bigint = $1 AND u.aktif = true AND o.aktif = true AND o.role = 'owner'"
-    ).bind(claims.user_id).fetch_optional(&state.db).await
-        .map_err(|_| access_error(StatusCode::SERVICE_UNAVAILABLE))?;
+         WHERE u.id::bigint = $1 AND u.aktif = true AND o.aktif = true AND o.role = 'owner'",
+    )
+    .bind(claims.user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|_| access_error(StatusCode::SERVICE_UNAVAILABLE))?;
     let Some((email, role, owner_id, tier)) = account else {
         return Err(access_error(StatusCode::UNAUTHORIZED));
     };
@@ -134,13 +141,21 @@ pub async fn validate_claims(state: &AppState, mut claims: Claims) -> Result<Cla
 }
 
 #[allow(clippy::result_large_err)]
-pub async fn ensure_unit_access(state: &AppState, claims: &Claims, unit_id: i64) -> Result<(), Response> {
+pub async fn ensure_unit_access(
+    state: &AppState,
+    claims: &Claims,
+    unit_id: i64,
+) -> Result<(), Response> {
     let allowed: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM business_units u WHERE u.id::bigint = $1 AND u.owner_id::bigint = $2
          AND ($3 OR EXISTS(SELECT 1 FROM user_units uu WHERE uu.unit_id = u.id AND uu.user_id::bigint = $4)))"
     ).bind(unit_id).bind(claims.owner_id).bind(claims.role == "owner").bind(claims.user_id)
         .fetch_one(&state.db).await.map_err(|_| access_error(StatusCode::SERVICE_UNAVAILABLE))?;
-    if allowed { Ok(()) } else { Err(access_error(StatusCode::FORBIDDEN)) }
+    if allowed {
+        Ok(())
+    } else {
+        Err(access_error(StatusCode::FORBIDDEN))
+    }
 }
 
 #[allow(clippy::result_large_err)]
@@ -160,7 +175,8 @@ impl FromRequestParts<Arc<AppState>> for Claims {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
-        let claims = require_claims(&parts.headers, &state.jwt_secret).map_err(|err| err.into_response())?;
+        let claims =
+            require_claims(&parts.headers, &state.jwt_secret).map_err(|err| err.into_response())?;
         validate_claims(state, claims).await
     }
 }
@@ -263,7 +279,11 @@ pub async fn register_owner(
     let nama_owner = payload.nama.clone();
     tokio::spawn(async move {
         if let Err(e) = crate::email::send_otp_email(&email_owner, &nama_owner, &otp_code).await {
-            tracing::error!("❌ Gagal mengirimkan email OTP registrasi ke {}: {}", email_owner, e);
+            tracing::error!(
+                "❌ Gagal mengirimkan email OTP registrasi ke {}: {}",
+                email_owner,
+                e
+            );
         }
     });
 
@@ -271,7 +291,9 @@ pub async fn register_owner(
         StatusCode::CREATED,
         Json(ApiResponse {
             status: "require_2fa".to_string(),
-            message: "Registrasi akun berhasil! Kode OTP verifikasi telah dikirimkan ke email Anda.".to_string(),
+            message:
+                "Registrasi akun berhasil! Kode OTP verifikasi telah dikirimkan ke email Anda."
+                    .to_string(),
             data: Some(serde_json::json!({
                 "owner_id": new_id,
                 "email": payload.email,
@@ -353,7 +375,8 @@ pub async fn login_owner(
         let email_owner = owner.2.clone();
         let nama_owner = owner.1.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::email::send_otp_email(&email_owner, &nama_owner, &otp_code).await {
+            if let Err(e) = crate::email::send_otp_email(&email_owner, &nama_owner, &otp_code).await
+            {
                 tracing::error!("❌ Gagal mengirimkan email OTP ke {}: {}", email_owner, e);
             }
         });
@@ -481,13 +504,14 @@ pub async fn verify_owner_2fa(
     }
 
     // Ambil data OTP dinamis, masa kedaluwarsa, dan jumlah percobaan dari PostgreSQL
-    let otp_row = sqlx::query_as::<_, (Option<String>, Option<chrono::NaiveDateTime>, Option<i32>)>(
-        "SELECT otp_code, otp_expires_at, otp_attempts FROM users WHERE id = $1",
-    )
-    .bind(owner.0)
-    .fetch_optional(&state.db)
-    .await
-    .unwrap_or(None);
+    let otp_row =
+        sqlx::query_as::<_, (Option<String>, Option<chrono::NaiveDateTime>, Option<i32>)>(
+            "SELECT otp_code, otp_expires_at, otp_attempts FROM users WHERE id = $1",
+        )
+        .bind(owner.0)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
 
     // Tidak ada fallback ke secret statis: OTP harus berasal dari login terbaru.
     let (db_otp, db_expires, attempts) = match otp_row {
@@ -506,12 +530,11 @@ pub async fn verify_owner_2fa(
 
     const MAX_OTP_ATTEMPTS: i32 = 5;
     if attempts >= MAX_OTP_ATTEMPTS {
-        let _ = sqlx::query(
-            "UPDATE users SET otp_code = NULL, otp_expires_at = NULL WHERE id = $1",
-        )
-        .bind(owner.0)
-        .execute(&state.db)
-        .await;
+        let _ =
+            sqlx::query("UPDATE users SET otp_code = NULL, otp_expires_at = NULL WHERE id = $1")
+                .bind(owner.0)
+                .execute(&state.db)
+                .await;
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(ApiResponse::<OwnerAuthResponse> {
@@ -528,7 +551,9 @@ pub async fn verify_owner_2fa(
             StatusCode::UNAUTHORIZED,
             Json(ApiResponse::<OwnerAuthResponse> {
                 status: "error".to_string(),
-                message: "Kode OTP telah kedaluwarsa. Silakan login ulang untuk meminta kode OTP baru.".to_string(),
+                message:
+                    "Kode OTP telah kedaluwarsa. Silakan login ulang untuk meminta kode OTP baru."
+                        .to_string(),
                 data: None,
             }),
         );

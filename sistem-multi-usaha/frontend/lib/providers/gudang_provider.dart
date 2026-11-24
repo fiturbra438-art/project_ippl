@@ -30,6 +30,9 @@ class GudangProvider extends ChangeNotifier {
           StatusTransfer stEnum = StatusTransfer.pending;
           if (stStr == 'diterima') stEnum = StatusTransfer.diterima;
           if (stStr == 'ditolak') stEnum = StatusTransfer.ditolak;
+          if (stStr == 'disetujui') stEnum = StatusTransfer.disetujui;
+          if (stStr == 'dikirim') stEnum = StatusTransfer.dikirim;
+          if (stStr == 'dibatalkan') stEnum = StatusTransfer.dibatalkan;
 
           return TransferStokModel(
             id: (item['id'] as num).toInt(),
@@ -41,6 +44,9 @@ class GudangProvider extends ChangeNotifier {
             namaProduk: item['nama_produk'] as String? ?? '',
             jumlah: (item['jumlah'] as num?)?.toInt() ?? 1,
             waktuKirim: DateTime.tryParse(item['waktu_kirim'] as String? ?? '') ?? DateTime.now(),
+            waktuTerima: DateTime.tryParse(item['waktu_terima'] as String? ?? ''),
+            alasanPenolakan: item['alasan_penolakan'] as String?,
+            dibatalkanOleh: item['dibatalkan_oleh'] as String?,
             status: stEnum,
           );
         }).toList();
@@ -112,48 +118,40 @@ class GudangProvider extends ChangeNotifier {
   }
 
   Future<bool> konfirmasiPenerimaan(int id) async {
-    _lastError = null;
-    try {
-      final res = await ApiService.patch('/gudang/transfer/$id/status', {
-        'status': 'diterima',
-      });
-      if (res != null && res['status'] == 'success') {
-        final idx = _daftarTransfer.indexWhere((t) => t.id == id);
-        if (idx != -1) {
-          _daftarTransfer[idx].status = StatusTransfer.diterima;
-          _daftarTransfer[idx].waktuTerima = DateTime.now();
-          notifyListeners();
-        }
-        return true;
-      }
-      _lastError = res?['message'] as String? ?? 'Gagal mengonfirmasi penerimaan.';
-    } catch (e) {
-      debugPrint('GudangProvider.konfirmasiPenerimaan error: $e');
-      _lastError = 'Gagal mengonfirmasi penerimaan: $e';
-    }
-
-    notifyListeners();
-    return false;
+    return _ubahStatusTransfer(id, 'diterima');
   }
 
-  Future<bool> tolakTransfer(int id) async {
+  Future<bool> setujuiTransfer(int id) async {
+    return _ubahStatusTransfer(id, 'disetujui');
+  }
+
+  Future<bool> kirimTransfer(int id) async {
+    return _ubahStatusTransfer(id, 'dikirim');
+  }
+
+  Future<bool> batalkanTransfer(int id) async {
+    return _ubahStatusTransfer(id, 'dibatalkan');
+  }
+
+  Future<bool> tolakTransfer(int id, {required String alasan}) async {
+    return _ubahStatusTransfer(id, 'ditolak', alasan: alasan);
+  }
+
+  Future<bool> _ubahStatusTransfer(int id, String status, {String? alasan}) async {
     _lastError = null;
     try {
       final res = await ApiService.patch('/gudang/transfer/$id/status', {
-        'status': 'ditolak',
+        'status': status,
+        if (alasan != null) 'alasan': alasan,
       });
       if (res != null && res['status'] == 'success') {
-        final idx = _daftarTransfer.indexWhere((t) => t.id == id);
-        if (idx != -1) {
-          _daftarTransfer[idx].status = StatusTransfer.ditolak;
-          notifyListeners();
-        }
+        await fetchTransferFromApi();
         return true;
       }
-      _lastError = res?['message'] as String? ?? 'Gagal menolak transfer.';
+      _lastError = res?['message'] as String? ?? 'Gagal memperbarui status transfer.';
     } catch (e) {
-      debugPrint('GudangProvider.tolakTransfer error: $e');
-      _lastError = 'Gagal menolak transfer: $e';
+      debugPrint('GudangProvider._ubahStatusTransfer error: $e');
+      _lastError = 'Gagal memperbarui status transfer: $e';
     }
 
     notifyListeners();
@@ -183,8 +181,4 @@ class GudangProvider extends ChangeNotifier {
     return false;
   }
 
-  void catatMutasi(MutasiStokModel mutasi) {
-    _daftarMutasi.insert(0, mutasi);
-    notifyListeners();
-  }
 }

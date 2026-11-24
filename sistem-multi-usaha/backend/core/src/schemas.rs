@@ -126,6 +126,7 @@ pub struct UpdateProdukRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct AdjustStokRequest {
+    pub unit_id: i64,
     pub penambahan: i32, // Bisa negatif untuk pengurangan manual
 }
 
@@ -209,6 +210,21 @@ pub struct CreateTransaksiManualRequest {
     pub keterangan: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RefundTransaksiRequest {
+    pub alasan: String,
+    #[serde(default)]
+    pub void: bool,
+    #[serde(default)]
+    pub items: Vec<RefundTransaksiItemRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RefundTransaksiItemRequest {
+    pub transaction_item_id: i64,
+    pub qty: i32,
+}
+
 // ==================== GUDANG & PERMINTAAN STOK SCHEMAS ====================
 
 #[derive(Debug, Deserialize)]
@@ -243,6 +259,8 @@ pub struct CreateTransferStokRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpdateStatusTransferRequest {
     pub status: StatusTransfer,
+    #[serde(default)]
+    pub alasan: Option<String>,
 }
 
 // ==================== DASHBOARD & AI SCHEMAS ====================

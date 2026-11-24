@@ -47,8 +47,9 @@ async fn main() {
 
     let shared_state = Arc::new(AppState::new(pool).await);
 
-    let cors_origin_env = std::env::var("CORS_ORIGIN")
-        .unwrap_or_else(|_| "http://localhost:8000,http://127.0.0.1:8000,http://localhost:3000".to_string());
+    let cors_origin_env = std::env::var("CORS_ORIGIN").unwrap_or_else(|_| {
+        "http://localhost:8000,http://127.0.0.1:8000,http://localhost:3000".to_string()
+    });
     let allowed_origins: Vec<axum::http::HeaderValue> = cors_origin_env
         .split(',')
         .filter_map(|s| s.trim().parse::<axum::http::HeaderValue>().ok())
@@ -117,18 +118,9 @@ async fn main() {
         .route("/api/pos/shift/buka", post(pos::buka_shift))
         .route("/api/pos/shift/tutup", post(pos::tutup_shift))
         .route("/api/pos/checkout", post(pos::checkout_pos))
-        .route(
-            "/api/pos/orders/active",
-            get(pos::list_active_orders),
-        )
-        .route(
-            "/api/pos/rental/return",
-            post(pos::return_rental),
-        )
-        .route(
-            "/api/pos/service/status",
-            patch(pos::update_service_status),
-        )
+        .route("/api/pos/orders/active", get(pos::list_active_orders))
+        .route("/api/pos/rental/return", post(pos::return_rental))
+        .route("/api/pos/service/status", patch(pos::update_service_status))
         .route(
             "/api/transaksi",
             get(pos::list_transaksi).post(pos::create_transaksi_manual),

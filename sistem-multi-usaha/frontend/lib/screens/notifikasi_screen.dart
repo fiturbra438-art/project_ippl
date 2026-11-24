@@ -40,13 +40,15 @@ class NotifikasiScreen extends StatelessWidget {
         ),
         actions: [
           TextButton(
-            onPressed: () => provider.tandaiSemuaDibaca(),
-            child: const Text('Tandai Semua Dibaca', style: TextStyle(color: AppTheme.primaryBlue, fontWeight: FontWeight.bold)),
+            onPressed: null,
+            child: const Text('Status baca belum tersimpan'),
           ),
           const SizedBox(width: 12),
         ],
       ),
-      body: ListView.separated(
+      body: provider.daftarNotifikasi.isEmpty
+          ? const Center(child: Text('Notifikasi belum terhubung ke backend.'))
+          : ListView.separated(
         padding: EdgeInsets.symmetric(horizontal: isMobile ? 16 : 32, vertical: 20),
         itemCount: provider.daftarNotifikasi.length,
         separatorBuilder: (_, __) => const SizedBox(height: 12),
@@ -54,7 +56,7 @@ class NotifikasiScreen extends StatelessWidget {
           final n = provider.daftarNotifikasi[index];
 
           return InkWell(
-            onTap: () => provider.tandaiDibaca(n.id),
+            onTap: null,
             borderRadius: BorderRadius.circular(16),
             child: Container(
               padding: const EdgeInsets.all(18),

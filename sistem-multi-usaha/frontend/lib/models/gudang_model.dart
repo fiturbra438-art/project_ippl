@@ -1,4 +1,4 @@
-enum StatusTransfer { pending, diterima, ditolak }
+enum StatusTransfer { pending, disetujui, ditolak, dikirim, diterima, dibatalkan }
 
 class TransferStokModel {
   final int id;
@@ -11,6 +11,8 @@ class TransferStokModel {
   final int jumlah;
   final DateTime waktuKirim;
   DateTime? waktuTerima;
+  final String? alasanPenolakan;
+  final String? dibatalkanOleh;
   StatusTransfer status;
 
   TransferStokModel({
@@ -24,6 +26,8 @@ class TransferStokModel {
     required this.jumlah,
     required this.waktuKirim,
     this.waktuTerima,
+    this.alasanPenolakan,
+    this.dibatalkanOleh,
     this.status = StatusTransfer.pending,
   });
 }

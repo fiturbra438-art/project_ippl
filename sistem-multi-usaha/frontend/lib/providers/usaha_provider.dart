@@ -83,7 +83,7 @@ class UsahaProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> tambahUsaha(UsahaModel usaha) async {
+  Future<bool> tambahUsaha(UsahaModel usaha) async {
     _lastError = null;
     try {
       final res = await ApiService.post('/usaha', {
@@ -95,6 +95,7 @@ class UsahaProvider extends ChangeNotifier {
       });
       if (res != null && res['status'] == 'success' && res['data'] != null) {
         await fetchUsahaFromApi();
+        return true;
       } else {
         _lastError = res?['message'] as String? ?? 'Gagal menambah unit usaha.';
         notifyListeners();
@@ -104,9 +105,10 @@ class UsahaProvider extends ChangeNotifier {
       _lastError = 'Gagal menambah unit usaha: $e';
       notifyListeners();
     }
+    return false;
   }
 
-  Future<void> hapusUsaha(int id) async {
+  Future<bool> hapusUsaha(int id) async {
     _lastError = null;
     try {
       final res = await ApiService.delete('/usaha/$id');
@@ -114,8 +116,9 @@ class UsahaProvider extends ChangeNotifier {
       if (ok) {
         _daftarUsaha.removeWhere((item) => item.id == id);
         notifyListeners();
+        return true;
       } else {
-        _lastError = 'Gagal menghapus unit usaha di server.';
+        _lastError = res?['message'] as String? ?? 'Gagal menghapus unit usaha di server.';
         notifyListeners();
       }
     } catch (e) {
@@ -123,9 +126,10 @@ class UsahaProvider extends ChangeNotifier {
       _lastError = 'Gagal menghapus unit usaha: $e';
       notifyListeners();
     }
+    return false;
   }
 
-  Future<void> toggleHasPos(int id) async {
+  Future<bool> toggleHasPos(int id) async {
     _lastError = null;
     final idx = _daftarUsaha.indexWhere((item) => item.id == id);
     if (idx != -1) {
@@ -146,6 +150,7 @@ class UsahaProvider extends ChangeNotifier {
             hasPos: !u.hasPos,
           );
           notifyListeners();
+          return true;
         } else {
           _lastError = res?['message'] as String? ?? 'Gagal mengubah status POS.';
           notifyListeners();
@@ -156,5 +161,6 @@ class UsahaProvider extends ChangeNotifier {
         notifyListeners();
       }
     }
+    return false;
   }
 }

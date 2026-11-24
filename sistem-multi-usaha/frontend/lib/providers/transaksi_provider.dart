@@ -62,8 +62,31 @@ class TransaksiProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void tambahTransaksi(TransaksiModel transaksi) {
-    _daftarTransaksi.insert(0, transaksi);
+  Future<bool> catatTransaksiManual({
+    required int unitId,
+    required JenisTransaksi jenis,
+    required String kategori,
+    required double jumlah,
+  }) async {
+    _lastError = null;
+    try {
+      final response = await ApiService.post('/transaksi', {
+        'unit_id': unitId,
+        'jenis': jenis.name,
+        'kategori': kategori,
+        'jumlah': jumlah,
+        'keterangan': kategori,
+      });
+      if (response != null && response['status'] == 'success') {
+        await fetchTransaksiFromApi(unitId: unitId);
+        return true;
+      }
+      _lastError = response?['message'] as String? ?? 'Gagal menyimpan transaksi.';
+    } catch (error) {
+      debugPrint('TransaksiProvider.catatTransaksiManual error: $error');
+      _lastError = 'Gagal menyimpan transaksi: $error';
+    }
     notifyListeners();
+    return false;
   }
 }

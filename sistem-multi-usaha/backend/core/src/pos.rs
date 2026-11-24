@@ -10,11 +10,12 @@ use std::sync::Arc;
 
 use crate::auth::{accessible_unit_ids, ensure_unit_access};
 use crate::models::{
-    Claims, JenisTransaksi, RentalServiceOrderModel, ShiftKasirModel, StatusShift, TransaksiModel,
+    Claims, JenisTransaksi, RefundItemModel, RefundModel, RentalServiceOrderModel, ShiftKasirModel,
+    StatusShift, TransaksiDetailModel, TransaksiItemDetailModel, TransaksiModel,
 };
 use crate::schemas::{
     ApiResponse, BukaShiftRequest, CheckoutRequest, CreateTransaksiManualRequest,
-    ReturnRentalRequest, TutupShiftRequest, UpdateServiceStatusRequest,
+    RefundTransaksiRequest, ReturnRentalRequest, TutupShiftRequest, UpdateServiceStatusRequest,
 };
 use crate::state::AppState;
 
@@ -22,6 +23,32 @@ use crate::state::AppState;
 pub struct TransaksiQuery {
     pub unit_id: Option<i64>,
     pub jenis: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+pub(crate) fn bulatkan_dua(nilai: f64) -> f64 {
+    (nilai * 100.0).round() / 100.0
+}
+
+pub(crate) fn hitung_nilai_refund(
+    subtotal: f64,
+    qty_awal: i32,
+    qty_refund: i32,
+    faktor_diskon: f64,
+) -> f64 {
+    if qty_awal <= 0 || qty_refund <= 0 || subtotal <= 0.0 {
+        return 0.0;
+    }
+    let dasar = subtotal * (qty_refund as f64) / (qty_awal as f64);
+    bulatkan_dua((dasar * faktor_diskon).max(0.0))
+}
+
+pub(crate) fn refund_masih_boleh(total: f64, sudah: f64, baru: f64) -> bool {
+    if baru <= 0.0 {
+        return false;
+    }
+    (sudah + baru) <= total + 0.01
 }
 
 // 1. STATUS SHIFT KASIR AKTIF (Membaca langsung dari tabel PostgreSQL cashier_shifts)
@@ -32,7 +59,9 @@ pub async fn get_shift_status(
 ) -> impl IntoResponse {
     use rust_decimal::prelude::ToPrimitive;
 
-    if let Err(err) = ensure_unit_access(&state, &claims, unit_id).await { return err; }
+    if let Err(err) = ensure_unit_access(&state, &claims, unit_id).await {
+        return err;
+    }
 
     // Pastikan unit usaha yang diminta memang milik tenant pengguna.
     let unit_valid: bool = sqlx::query_scalar(
@@ -131,7 +160,9 @@ pub async fn buka_shift(
             .into_response();
     }
 
-    if let Err(err) = ensure_unit_access(&state, &claims, payload.unit_id).await { return err; }
+    if let Err(err) = ensure_unit_access(&state, &claims, payload.unit_id).await {
+        return err;
+    }
 
     // Pastikan unit usaha target milik tenant pengguna (mencegah buka shift lintas tenant).
     let unit_valid: bool = sqlx::query_scalar(
@@ -351,7 +382,9 @@ pub async fn checkout_pos(
     let user_id = claims.user_id;
     let _kasir_nama = claims.sub.clone();
 
-    if let Err(err) = ensure_unit_access(&state, &claims, payload.unit_id).await { return err; }
+    if let Err(err) = ensure_unit_access(&state, &claims, payload.unit_id).await {
+        return err;
+    }
 
     // Verifikasi bahwa unit_id milik owner_id terkait
     let unit_valid: bool = sqlx::query_scalar(
@@ -558,10 +591,7 @@ pub async fn checkout_pos(
     // - Function fn_hitung_total_belanja
     // - Trigger trg_kurangi_stok_inventaris
     // - Trigger trg_update_omzet_unit
-    let catatan_transaksi = payload
-        .notes
-        .clone()
-        .or_else(|| payload.keterangan.clone());
+    let catatan_transaksi = payload.notes.clone().or_else(|| payload.keterangan.clone());
     let operation_mode = payload
         .operation_mode
         .clone()
@@ -673,16 +703,19 @@ pub async fn list_transaksi(
     let owner_id = claims.owner_id;
 
     if let Some(uid) = query.unit_id {
-        if let Err(err) = ensure_unit_access(&state, &claims, uid).await { return err; }
-    }
-    let scoped_ids = if query.unit_id.is_none() && !["owner", "auditor"].contains(&claims.role.as_str()) {
-        match accessible_unit_ids(&state, &claims).await {
-            Ok(ids) => Some(ids),
-            Err(err) => return err,
+        if let Err(err) = ensure_unit_access(&state, &claims, uid).await {
+            return err;
         }
-    } else {
-        None
-    };
+    }
+    let scoped_ids =
+        if query.unit_id.is_none() && !["owner", "auditor"].contains(&claims.role.as_str()) {
+            match accessible_unit_ids(&state, &claims).await {
+                Ok(ids) => Some(ids),
+                Err(err) => return err,
+            }
+        } else {
+            None
+        };
 
     // Ambil data transaksi langsung dari PostgreSQL
     let rows = if let Some(uid) = query.unit_id {
@@ -787,7 +820,18 @@ pub async fn list_transaksi(
 
     // Gabungkan dengan transaksi manual yang tersimpan permanen di tabel cash_flows
     let cash_rows = if let Some(uid) = query.unit_id {
-        sqlx::query_as::<_, (i32, i32, String, chrono::NaiveDateTime, String, String, rust_decimal::Decimal)>(
+        sqlx::query_as::<
+            _,
+            (
+                i32,
+                i32,
+                String,
+                chrono::NaiveDateTime,
+                String,
+                String,
+                rust_decimal::Decimal,
+            ),
+        >(
             "SELECT c.id, c.unit_id, u.nama, c.tanggal::timestamp, c.jenis, c.kategori, c.jumlah
              FROM cash_flows c
              JOIN business_units u ON u.id = c.unit_id
@@ -799,7 +843,18 @@ pub async fn list_transaksi(
         .fetch_all(&state.db)
         .await
     } else if let Some(ids) = &scoped_ids {
-        sqlx::query_as::<_, (i32, i32, String, chrono::NaiveDateTime, String, String, rust_decimal::Decimal)>(
+        sqlx::query_as::<
+            _,
+            (
+                i32,
+                i32,
+                String,
+                chrono::NaiveDateTime,
+                String,
+                String,
+                rust_decimal::Decimal,
+            ),
+        >(
             "SELECT c.id, c.unit_id, u.nama, c.tanggal::timestamp, c.jenis, c.kategori, c.jumlah
              FROM cash_flows c
              JOIN business_units u ON u.id = c.unit_id
@@ -811,7 +866,18 @@ pub async fn list_transaksi(
         .fetch_all(&state.db)
         .await
     } else {
-        sqlx::query_as::<_, (i32, i32, String, chrono::NaiveDateTime, String, String, rust_decimal::Decimal)>(
+        sqlx::query_as::<
+            _,
+            (
+                i32,
+                i32,
+                String,
+                chrono::NaiveDateTime,
+                String,
+                String,
+                rust_decimal::Decimal,
+            ),
+        >(
             "SELECT c.id, c.unit_id, u.nama, c.tanggal::timestamp, c.jenis, c.kategori, c.jumlah
              FROM cash_flows c
              JOIN business_units u ON u.id = c.unit_id
@@ -863,6 +929,17 @@ pub async fn list_transaksi(
         });
     }
 
+    let offset = query.offset.unwrap_or(0).max(0) as usize;
+    let limit = query.limit.unwrap_or(0);
+    if offset > 0 || limit > 0 {
+        let limit = if limit > 0 {
+            limit.min(500) as usize
+        } else {
+            hasil.len()
+        };
+        hasil = hasil.into_iter().skip(offset).take(limit).collect();
+    }
+
     (
         StatusCode::OK,
         Json(ApiResponse::<Vec<TransaksiModel>> {
@@ -872,6 +949,572 @@ pub async fn list_transaksi(
         }),
     )
         .into_response()
+}
+
+// 5b. DETAIL TRANSAKSI (item, refund, dan sisa yang dapat direfund)
+pub async fn get_transaksi_detail(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
+    use rust_decimal::prelude::ToPrimitive;
+
+    let header = sqlx::query_as::<
+        _,
+        (
+            i32,
+            i32,
+            String,
+            chrono::NaiveDateTime,
+            rust_decimal::Decimal,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
+        "SELECT t.id, t.unit_id, u.nama, t.tanggal, t.total, t.metode_bayar, t.status,
+                t.customer_name, t.notes
+         FROM transactions t
+         JOIN business_units u ON u.id = t.unit_id
+         WHERE t.id = $1 AND u.owner_id = $2",
+    )
+    .bind(id as i32)
+    .bind(claims.owner_id as i32)
+    .fetch_optional(&state.db)
+    .await
+    .unwrap_or(None);
+
+    let Some(header) = header else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<TransaksiDetailModel> {
+                status: "error".to_string(),
+                message: "Transaksi tidak ditemukan.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    };
+    if let Err(err) = ensure_unit_access(&state, &claims, header.1 as i64).await {
+        return err;
+    }
+
+    let item_rows = sqlx::query_as::<
+        _,
+        (
+            i32,
+            Option<i32>,
+            String,
+            String,
+            i32,
+            rust_decimal::Decimal,
+            rust_decimal::Decimal,
+            i64,
+        ),
+    >(
+        "SELECT ti.id, ti.product_id, COALESCE(ti.item_name, '-'),
+                COALESCE(ti.item_type, 'barang'), ti.qty, ti.harga_satuan, ti.subtotal,
+                COALESCE((SELECT SUM(ri.qty) FROM transaction_refund_items ri
+                          WHERE ri.transaction_item_id = ti.id), 0)::bigint
+         FROM transaction_items ti
+         WHERE ti.trx_id = $1
+         ORDER BY ti.id ASC",
+    )
+    .bind(id as i32)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let items: Vec<TransaksiItemDetailModel> = item_rows
+        .into_iter()
+        .map(|r| {
+            let refunded = r.7.max(0) as i32;
+            TransaksiItemDetailModel {
+                id: r.0 as i64,
+                product_id: r.1.map(|v| v as i64),
+                item_name: r.2,
+                item_type: r.3,
+                qty: r.4,
+                harga_satuan: r.5.to_f64().unwrap_or_default(),
+                subtotal: r.6.to_f64().unwrap_or_default(),
+                refunded_qty: refunded,
+                refundable_qty: (r.4 - refunded).max(0),
+            }
+        })
+        .collect();
+
+    let refund_rows = sqlx::query_as::<
+        _,
+        (
+            i32,
+            i32,
+            String,
+            String,
+            rust_decimal::Decimal,
+            String,
+            chrono::NaiveDateTime,
+        ),
+    >(
+        "SELECT id, transaction_id, jenis, alasan, jumlah, aktor, created_at
+         FROM transaction_refunds WHERE transaction_id = $1 ORDER BY id ASC",
+    )
+    .bind(id as i32)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let refund_item_rows = sqlx::query_as::<
+        _,
+        (
+            i32,
+            i32,
+            Option<i32>,
+            String,
+            String,
+            i32,
+            rust_decimal::Decimal,
+        ),
+    >(
+        "SELECT ri.refund_id, ri.transaction_item_id, ri.product_id, ri.item_name,
+                ri.item_type, ri.qty, ri.jumlah
+         FROM transaction_refund_items ri
+         JOIN transaction_refunds r ON r.id = ri.refund_id
+         WHERE r.transaction_id = $1 ORDER BY ri.id ASC",
+    )
+    .bind(id as i32)
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    let mut items_by_refund: std::collections::HashMap<i32, Vec<RefundItemModel>> =
+        std::collections::HashMap::new();
+    for row in refund_item_rows {
+        items_by_refund
+            .entry(row.0)
+            .or_default()
+            .push(RefundItemModel {
+                transaction_item_id: row.1 as i64,
+                product_id: row.2.map(|v| v as i64),
+                item_name: row.3,
+                item_type: row.4,
+                qty: row.5,
+                jumlah: row.6.to_f64().unwrap_or_default(),
+            });
+    }
+
+    let refunded_total: f64 = refund_rows
+        .iter()
+        .map(|r| r.4.to_f64().unwrap_or_default())
+        .sum();
+    let refunds: Vec<RefundModel> = refund_rows
+        .into_iter()
+        .map(|r| RefundModel {
+            id: r.0 as i64,
+            transaction_id: r.1 as i64,
+            unit_id: header.1 as i64,
+            jenis: r.2,
+            alasan: r.3,
+            jumlah: r.4.to_f64().unwrap_or_default(),
+            aktor: r.5,
+            created_at: r.6.format("%Y-%m-%d %H:%M").to_string(),
+            items: items_by_refund.remove(&r.0).unwrap_or_default(),
+        })
+        .collect();
+
+    let total = header.4.to_f64().unwrap_or_default();
+    let detail = TransaksiDetailModel {
+        id: header.0 as i64,
+        owner_id: claims.owner_id,
+        unit_id: header.1 as i64,
+        nama_unit: header.2,
+        tanggal: header.3.format("%Y-%m-%d %H:%M").to_string(),
+        total,
+        metode_bayar: header.5,
+        status: header.6,
+        customer_name: header.7,
+        notes: header.8,
+        items,
+        refunds,
+        refunded_total: bulatkan_dua(refunded_total),
+        refundable_total: bulatkan_dua((total - refunded_total).max(0.0)),
+    };
+
+    (
+        StatusCode::OK,
+        Json(ApiResponse::<TransaksiDetailModel> {
+            status: "success".to_string(),
+            message: "Detail transaksi berhasil dimuat.".to_string(),
+            data: Some(detail),
+        }),
+    )
+        .into_response()
+}
+
+// 5c. REFUND / VOID TRANSAKSI (atomic, idempoten per transaksi, tanpa menghapus transaksi asli)
+pub async fn refund_transaksi(
+    State(state): State<Arc<AppState>>,
+    claims: Claims,
+    Path(id): Path<i64>,
+    Json(payload): Json<RefundTransaksiRequest>,
+) -> impl IntoResponse {
+    use rust_decimal::prelude::ToPrimitive;
+    use std::collections::{HashMap, HashSet};
+
+    if !["owner", "manager"].contains(&claims.role.as_str()) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<RefundModel> {
+                status: "error".to_string(),
+                message: "Hanya Owner atau Manager yang berwenang melakukan refund.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
+    let alasan = payload.alasan.trim().to_string();
+    if alasan.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<RefundModel> {
+                status: "error".to_string(),
+                message: "Alasan refund wajib diisi.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
+
+    let header = sqlx::query_as::<_, (i32, rust_decimal::Decimal, String)>(
+        "SELECT t.unit_id, t.total, t.status
+         FROM transactions t JOIN business_units u ON u.id = t.unit_id
+         WHERE t.id = $1 AND u.owner_id = $2",
+    )
+    .bind(id as i32)
+    .bind(claims.owner_id as i32)
+    .fetch_optional(&state.db)
+    .await
+    .unwrap_or(None);
+    let Some((unit_id, _, _)) = header else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<RefundModel> {
+                status: "error".to_string(),
+                message: "Transaksi tidak ditemukan.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    };
+    if let Err(err) = ensure_unit_access(&state, &claims, unit_id as i64).await {
+        return err;
+    }
+
+    let result: Result<RefundModel, (StatusCode, String)> = async {
+        let mut tx = state
+            .db
+            .begin()
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        let (unit_id, total_dec, status): (i32, rust_decimal::Decimal, String) =
+            sqlx::query_as(
+                "SELECT t.unit_id, t.total, t.status FROM transactions t
+                 WHERE t.id = $1 FOR UPDATE",
+            )
+            .bind(id as i32)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if status != "selesai" {
+            return Err((
+                StatusCode::CONFLICT,
+                "Hanya transaksi berstatus selesai yang dapat direfund.".to_string(),
+            ));
+        }
+        let total = total_dec.to_f64().unwrap_or_default();
+
+        let already_refunded: rust_decimal::Decimal = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(jumlah), 0) FROM transaction_refunds WHERE transaction_id = $1",
+        )
+        .bind(id as i32)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let already = already_refunded.to_f64().unwrap_or_default();
+        if already >= total - 0.005 {
+            return Err((
+                StatusCode::CONFLICT,
+                "Transaksi sudah direfund penuh.".to_string(),
+            ));
+        }
+
+        let item_rows = sqlx::query_as::<
+            _,
+            (
+                i32,
+                Option<i32>,
+                String,
+                String,
+                i32,
+                rust_decimal::Decimal,
+                rust_decimal::Decimal,
+                i64,
+            ),
+        >(
+            "SELECT ti.id, ti.product_id, COALESCE(ti.item_name, '-'),
+                    COALESCE(ti.item_type, 'barang'), ti.qty, ti.harga_satuan, ti.subtotal,
+                    COALESCE((SELECT SUM(ri.qty) FROM transaction_refund_items ri
+                              WHERE ri.transaction_item_id = ti.id), 0)::bigint
+             FROM transaction_items ti
+             WHERE ti.trx_id = $1
+             ORDER BY ti.id ASC
+             FOR UPDATE OF ti",
+        )
+        .bind(id as i32)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if item_rows.is_empty() {
+            return Err((
+                StatusCode::CONFLICT,
+                "Transaksi tidak memiliki item untuk direfund.".to_string(),
+            ));
+        }
+
+        let mut request_qty: HashMap<i32, i32> = HashMap::new();
+        if payload.void {
+            for row in &item_rows {
+                let sisa = row.4 - row.7.max(0) as i32;
+                if sisa > 0 {
+                    request_qty.insert(row.0, sisa);
+                }
+            }
+        } else {
+            if payload.items.is_empty() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    "Pilih minimal satu item untuk direfund.".to_string(),
+                ));
+            }
+            let mut seen = HashSet::new();
+            for item in &payload.items {
+                if !seen.insert(item.transaction_item_id) {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        "Item refund duplikat dalam satu permintaan.".to_string(),
+                    ));
+                }
+                if item.qty <= 0 {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        "Jumlah refund per item harus lebih besar dari nol.".to_string(),
+                    ));
+                }
+                request_qty.insert(item.transaction_item_id as i32, item.qty);
+            }
+        }
+        if request_qty.is_empty() {
+            return Err((
+                StatusCode::CONFLICT,
+                "Tidak ada item yang masih dapat direfund.".to_string(),
+            ));
+        }
+
+        let sum_subtotal: f64 = item_rows
+            .iter()
+            .map(|r| r.6.to_f64().unwrap_or_default())
+            .sum();
+        let faktor = if sum_subtotal > 0.0 {
+            (total / sum_subtotal).clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+
+        let mut total_refund = 0.0;
+        let mut rencana: Vec<(i32, Option<i32>, String, String, i32, f64)> = Vec::new();
+        for row in &item_rows {
+            let Some(qty) = request_qty.get(&row.0).copied() else {
+                continue;
+            };
+            let refunded = row.7.max(0) as i32;
+            let sisa = row.4 - refunded;
+            if qty > sisa {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "Jumlah refund item '{}' melebihi sisa yang dapat direfund ({}).",
+                        row.2, sisa
+                    ),
+                ));
+            }
+            let subtotal = row.6.to_f64().unwrap_or_default();
+            let nilai = hitung_nilai_refund(subtotal, row.4, qty, faktor);
+            if nilai <= 0.0 {
+                continue;
+            }
+            total_refund += nilai;
+            rencana.push((row.0, row.1, row.2.clone(), row.3.clone(), qty, nilai));
+        }
+
+        if payload.void {
+            let seluruh_sisa_terpilih = item_rows.iter().all(|row| {
+                let sisa = row.4 - row.7.max(0) as i32;
+                sisa <= 0 || request_qty.get(&row.0).copied().unwrap_or(0) == sisa
+            });
+            if seluruh_sisa_terpilih {
+                total_refund = (total - already).max(0.0);
+            }
+        }
+        total_refund = bulatkan_dua(total_refund);
+        if !refund_masih_boleh(total, already, total_refund) {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Total refund melebihi nilai transaksi yang belum direfund.".to_string(),
+            ));
+        }
+
+        let jumlah_dec =
+            rust_decimal::Decimal::from_f64_retain(total_refund).unwrap_or_default();
+        let (refund_id, created_at): (i32, chrono::NaiveDateTime) = sqlx::query_as(
+            "INSERT INTO transaction_refunds
+             (transaction_id, owner_id, unit_id, jenis, status, alasan, jumlah, aktor_id, aktor)
+             VALUES ($1, $2, $3, $4, 'selesai', $5, $6, $7, $8)
+             RETURNING id, created_at",
+        )
+        .bind(id as i32)
+        .bind(claims.owner_id as i32)
+        .bind(unit_id)
+        .bind(if payload.void { "void" } else { "refund" })
+        .bind(&alasan)
+        .bind(jumlah_dec)
+        .bind(claims.user_id as i32)
+        .bind(&claims.sub)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        let mut refund_items = Vec::new();
+        for (item_id, product_id, item_name, item_type, qty, nilai) in rencana {
+            let nilai_dec = rust_decimal::Decimal::from_f64_retain(nilai).unwrap_or_default();
+            sqlx::query(
+                "INSERT INTO transaction_refund_items
+                 (refund_id, transaction_item_id, product_id, item_name, item_type, qty, jumlah)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            )
+            .bind(refund_id)
+            .bind(item_id)
+            .bind(product_id)
+            .bind(&item_name)
+            .bind(&item_type)
+            .bind(qty)
+            .bind(nilai_dec)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+            if item_type.eq_ignore_ascii_case("barang") {
+                if let Some(pid) = product_id.filter(|v| *v > 0) {
+                    let inv_id: i32 = sqlx::query_scalar(
+                        "INSERT INTO inventories (unit_id, product_id, qty, min_stock)
+                         VALUES ($1, $2, $3, 5)
+                         ON CONFLICT (unit_id, product_id)
+                         DO UPDATE SET qty = inventories.qty + EXCLUDED.qty
+                         RETURNING id",
+                    )
+                    .bind(unit_id)
+                    .bind(pid)
+                    .bind(qty)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                    sqlx::query(
+                        "INSERT INTO stock_movements
+                         (inventory_id, tipe, qty, tanggal, unit_tujuan_id, dicatat_oleh,
+                          status, waktu_terima, created_at)
+                         VALUES ($1, 'masuk', $2, now(), $3, $4, 'diterima', now(), now())",
+                    )
+                    .bind(inv_id)
+                    .bind(qty)
+                    .bind(unit_id)
+                    .bind(claims.user_id as i32)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                }
+            }
+
+            refund_items.push(RefundItemModel {
+                transaction_item_id: item_id as i64,
+                product_id: product_id.map(|v| v as i64),
+                item_name,
+                item_type,
+                qty,
+                jumlah: nilai,
+            });
+        }
+
+        sqlx::query(
+            "INSERT INTO audit_logs (owner_id, aktor, role, aksi, modul, target, detail)
+             VALUES ($1, $2, $3, $4, 'POS', $5, $6)",
+        )
+        .bind(claims.owner_id as i32)
+        .bind(&claims.sub)
+        .bind(&claims.role)
+        .bind(if payload.void {
+            "Void transaksi"
+        } else {
+            "Refund transaksi"
+        })
+        .bind(format!("Transaksi #{}", id))
+        .bind(format!(
+            "{} senilai {} dengan alasan: {}",
+            if payload.void { "Void" } else { "Refund" },
+            total_refund,
+            alasan
+        ))
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+        Ok(RefundModel {
+            id: refund_id as i64,
+            transaction_id: id,
+            unit_id: unit_id as i64,
+            jenis: if payload.void { "void" } else { "refund" }.to_string(),
+            alasan,
+            jumlah: total_refund,
+            aktor: claims.sub.clone(),
+            created_at: created_at.format("%Y-%m-%d %H:%M").to_string(),
+            items: refund_items,
+        })
+    }
+    .await;
+
+    match result {
+        Ok(refund) => (
+            StatusCode::CREATED,
+            Json(ApiResponse::<RefundModel> {
+                status: "success".to_string(),
+                message: "Refund berhasil diproses dan transaksi asli tetap tersimpan.".to_string(),
+                data: Some(refund),
+            }),
+        )
+            .into_response(),
+        Err((status, message)) => (
+            status,
+            Json(ApiResponse::<RefundModel> {
+                status: "error".to_string(),
+                message,
+                data: None,
+            }),
+        )
+            .into_response(),
+    }
 }
 
 // 6. CATAT TRANSAKSI MANUAL (Pemasukan / Pengeluaran Umum)
@@ -921,17 +1564,18 @@ pub async fn create_transaksi_manual(
             .into_response();
     }
 
-    if let Err(err) = ensure_unit_access(&state, &claims, payload.unit_id).await { return err; }
+    if let Err(err) = ensure_unit_access(&state, &claims, payload.unit_id).await {
+        return err;
+    }
 
     // Validasi kepemilikan unit & ambil namanya langsung dari database.
-    let nama_unit: Option<String> = sqlx::query_scalar(
-        "SELECT nama FROM business_units WHERE id = $1 AND owner_id = $2",
-    )
-    .bind(payload.unit_id as i32)
-    .bind(owner_id as i32)
-    .fetch_optional(&state.db)
-    .await
-    .unwrap_or(None);
+    let nama_unit: Option<String> =
+        sqlx::query_scalar("SELECT nama FROM business_units WHERE id = $1 AND owner_id = $2")
+            .bind(payload.unit_id as i32)
+            .bind(owner_id as i32)
+            .fetch_optional(&state.db)
+            .await
+            .unwrap_or(None);
 
     let Some(nama_unit) = nama_unit else {
         return (
@@ -1111,16 +1755,19 @@ pub async fn list_active_orders(
     }
 
     if let Some(uid) = query.unit_id {
-        if let Err(err) = ensure_unit_access(&state, &claims, uid).await { return err; }
-    }
-    let scoped_ids = if query.unit_id.is_none() && !["owner", "auditor"].contains(&claims.role.as_str()) {
-        match accessible_unit_ids(&state, &claims).await {
-            Ok(ids) => Some(ids),
-            Err(err) => return err,
+        if let Err(err) = ensure_unit_access(&state, &claims, uid).await {
+            return err;
         }
-    } else {
-        None
-    };
+    }
+    let scoped_ids =
+        if query.unit_id.is_none() && !["owner", "auditor"].contains(&claims.role.as_str()) {
+            match accessible_unit_ids(&state, &claims).await {
+                Ok(ids) => Some(ids),
+                Err(err) => return err,
+            }
+        } else {
+            None
+        };
 
     // Ambil order rental & jasa yang belum selesai dari PostgreSQL
     let rows = if let Some(uid) = query.unit_id {
@@ -1194,7 +1841,9 @@ pub async fn list_active_orders(
                         customer_name: r.customer_name,
                         start_time: r.start_time.format("%Y-%m-%d %H:%M").to_string(),
                         expected_end_time: r.expected_end_time.format("%Y-%m-%d %H:%M").to_string(),
-                        actual_end_time: r.actual_end_time.map(|t| t.format("%Y-%m-%d %H:%M").to_string()),
+                        actual_end_time: r
+                            .actual_end_time
+                            .map(|t| t.format("%Y-%m-%d %H:%M").to_string()),
                         duration: r.duration,
                         duration_unit: r.duration_unit,
                         qty: r.qty,
@@ -1230,17 +1879,18 @@ pub async fn return_rental(
     let owner_id = claims.owner_id;
 
     // Ambil order beserta status, unit, produk, dan qty untuk restore stok
-    let order_info: Option<(i32, Option<i32>, String, String, Option<String>, i32)> = sqlx::query_as(
-        "SELECT o.unit_id, o.product_id, o.item_name, o.status, o.customer_name, o.qty
+    let order_info: Option<(i32, Option<i32>, String, String, Option<String>, i32)> =
+        sqlx::query_as(
+            "SELECT o.unit_id, o.product_id, o.item_name, o.status, o.customer_name, o.qty
          FROM rental_service_orders o
          JOIN business_units u ON u.id = o.unit_id
          WHERE o.id = $1 AND u.owner_id = $2 AND o.order_type = 'rental'",
-    )
-    .bind(payload.order_id as i32)
-    .bind(owner_id as i32)
-    .fetch_optional(&state.db)
-    .await
-    .unwrap_or(None);
+        )
+        .bind(payload.order_id as i32)
+        .bind(owner_id as i32)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
 
     let Some((unit_id, product_id, item_name, status, cust, qty)) = order_info else {
         return (
@@ -1254,7 +1904,9 @@ pub async fn return_rental(
             .into_response();
     };
 
-    if let Err(err) = ensure_unit_access(&state, &claims, unit_id as i64).await { return err; }
+    if let Err(err) = ensure_unit_access(&state, &claims, unit_id as i64).await {
+        return err;
+    }
 
     // Cegah pengembalian ganda / manipulasi status order yang sudah selesai
     if !["active", "overdue"].contains(&status.as_str()) {
@@ -1447,13 +2099,19 @@ pub async fn update_service_status(
          WHERE o.id = $1 AND u.owner_id = $2 AND o.order_type = 'service'"
     ).bind(payload.order_id).bind(owner_id).fetch_optional(&state.db).await.unwrap_or(None);
     let Some(order_unit) = order_unit else {
-        return (StatusCode::NOT_FOUND, Json(ApiResponse::<()> {
-            status: "error".to_string(),
-            message: "Order layanan jasa tidak ditemukan.".to_string(),
-            data: None,
-        })).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse::<()> {
+                status: "error".to_string(),
+                message: "Order layanan jasa tidak ditemukan.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
     };
-    if let Err(err) = ensure_unit_access(&state, &claims, order_unit).await { return err; }
+    if let Err(err) = ensure_unit_access(&state, &claims, order_unit).await {
+        return err;
+    }
 
     let valid_status = ["queued", "in_progress", "ready", "completed", "cancelled"];
     if !valid_status.contains(&payload.status.as_str()) {
@@ -1461,8 +2119,9 @@ pub async fn update_service_status(
             StatusCode::BAD_REQUEST,
             Json(ApiResponse::<()> {
                 status: "error".to_string(),
-                message: "Status layanan tidak valid. Pilihan: queued, in_progress, ready, completed"
-                    .to_string(),
+                message:
+                    "Status layanan tidak valid. Pilihan: queued, in_progress, ready, completed"
+                        .to_string(),
                 data: None,
             }),
         )

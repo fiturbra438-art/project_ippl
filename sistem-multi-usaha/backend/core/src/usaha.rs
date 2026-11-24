@@ -55,10 +55,7 @@ fn map_usaha_row(u: UsahaRow) -> UsahaModel {
 }
 
 // 1. LIST UNIT USAHA (Strict Authentication via PostgreSQL)
-pub async fn list_usaha(
-    State(state): State<Arc<AppState>>,
-    claims: Claims,
-) -> impl IntoResponse {
+pub async fn list_usaha(State(state): State<Arc<AppState>>, claims: Claims) -> impl IntoResponse {
     let owner_id = claims.owner_id as i32;
     let role = claims.role.as_str();
 
@@ -110,7 +107,9 @@ pub async fn get_usaha_detail(
     Path(id): Path<i64>,
 ) -> impl IntoResponse {
     if claims.role != "owner" {
-        if let Err(err) = ensure_unit_access(&state, &claims, id).await { return err; }
+        if let Err(err) = ensure_unit_access(&state, &claims, id).await {
+            return err;
+        }
     }
     let row = sqlx::query_as::<_, UsahaRow>(
         "SELECT id, owner_id, nama, jenis_usaha, lokasi, kategori_portofolio, status, has_pos,
@@ -169,13 +168,12 @@ pub async fn create_usaha(
     }
 
     // Cek kuota tier owner langsung dari PostgreSQL
-    let owner_row: Option<(Option<String>, Option<i32>)> = sqlx::query_as(
-        "SELECT tier, kuota_unit_usaha FROM users WHERE id = $1 AND role = 'owner'",
-    )
-    .bind(owner_id as i32)
-    .fetch_optional(&state.db)
-    .await
-    .unwrap_or(None);
+    let owner_row: Option<(Option<String>, Option<i32>)> =
+        sqlx::query_as("SELECT tier, kuota_unit_usaha FROM users WHERE id = $1 AND role = 'owner'")
+            .bind(owner_id as i32)
+            .fetch_optional(&state.db)
+            .await
+            .unwrap_or(None);
 
     let (tier_opt, kuota_opt) = match owner_row {
         Some(r) => r,
@@ -199,13 +197,12 @@ pub async fn create_usaha(
     };
     let kuota_unit_usaha = kuota_opt.unwrap_or(5);
 
-    let current_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM business_units WHERE owner_id = $1",
-    )
-    .bind(owner_id as i32)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or(0);
+    let current_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM business_units WHERE owner_id = $1")
+            .bind(owner_id as i32)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
 
     if current_count >= (kuota_unit_usaha as i64) {
         return (
@@ -313,7 +310,9 @@ pub async fn update_usaha(
             .into_response();
     }
 
-    if let Err(err) = ensure_unit_access(&state, &claims, id).await { return err; }
+    if let Err(err) = ensure_unit_access(&state, &claims, id).await {
+        return err;
+    }
     let existing = sqlx::query_as::<_, UsahaRow>(
         "SELECT id, owner_id, nama, jenis_usaha, lokasi, kategori_portofolio, status, has_pos,
          pendapatan_bulan_ini, pengeluaran_bulan_ini, pertumbuhan_persen
@@ -406,7 +405,9 @@ pub async fn toggle_pos(
             .into_response();
     }
 
-    if let Err(err) = ensure_unit_access(&state, &claims, id).await { return err; }
+    if let Err(err) = ensure_unit_access(&state, &claims, id).await {
+        return err;
+    }
     let updated = sqlx::query_as::<_, UsahaRow>(
         "UPDATE business_units
          SET has_pos = NOT COALESCE(has_pos, true)

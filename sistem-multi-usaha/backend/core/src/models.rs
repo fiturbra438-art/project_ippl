@@ -197,8 +197,11 @@ pub struct StokOpnameModel {
 #[serde(rename_all = "lowercase")]
 pub enum StatusTransfer {
     Pending,
-    Diterima,
     Ditolak,
+    Disetujui,
+    Dikirim,
+    Diterima,
+    Dibatalkan,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,7 +217,71 @@ pub struct TransferStokModel {
     pub jumlah: i32,
     pub waktu_kirim: String,
     pub waktu_terima: Option<String>,
+    pub pemohon: Option<String>,
+    pub disetujui_oleh: Option<String>,
+    pub waktu_persetujuan: Option<String>,
+    pub dikirim_oleh: Option<String>,
+    pub waktu_pengiriman: Option<String>,
+    pub diterima_oleh: Option<String>,
+    pub alasan_penolakan: Option<String>,
+    pub dibatalkan_oleh: Option<String>,
+    pub waktu_pembatalan: Option<String>,
     pub status: StatusTransfer,
+}
+
+// ==================== REFUND / VOID ====================
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefundItemModel {
+    pub transaction_item_id: i64,
+    pub product_id: Option<i64>,
+    pub item_name: String,
+    pub item_type: String,
+    pub qty: i32,
+    pub jumlah: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefundModel {
+    pub id: i64,
+    pub transaction_id: i64,
+    pub unit_id: i64,
+    pub jenis: String,
+    pub alasan: String,
+    pub jumlah: f64,
+    pub aktor: String,
+    pub created_at: String,
+    pub items: Vec<RefundItemModel>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransaksiItemDetailModel {
+    pub id: i64,
+    pub product_id: Option<i64>,
+    pub item_name: String,
+    pub item_type: String,
+    pub qty: i32,
+    pub harga_satuan: f64,
+    pub subtotal: f64,
+    pub refunded_qty: i32,
+    pub refundable_qty: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransaksiDetailModel {
+    pub id: i64,
+    pub owner_id: i64,
+    pub unit_id: i64,
+    pub nama_unit: String,
+    pub tanggal: String,
+    pub total: f64,
+    pub metode_bayar: String,
+    pub status: String,
+    pub customer_name: Option<String>,
+    pub notes: Option<String>,
+    pub items: Vec<TransaksiItemDetailModel>,
+    pub refunds: Vec<RefundModel>,
+    pub refunded_total: f64,
+    pub refundable_total: f64,
 }
 
 // ==================== AUDIT LOG ====================

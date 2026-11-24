@@ -2,15 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/laporan_provider.dart';
+import '../providers/usaha_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
 import '../widgets/app_sidebar.dart';
 import 'dashboard_screen.dart';
 import 'usaha_screen.dart';
-import 'produk_screen.dart';
 import 'transaksi_screen.dart';
-import 'portofolio_screen.dart';
-import 'forecast_screen.dart';
 import 'chat_ai_screen.dart';
 
 class LaporanScreen extends StatefulWidget {
@@ -21,6 +19,12 @@ class LaporanScreen extends StatefulWidget {
 }
 
 class _LaporanScreenState extends State<LaporanScreen> {
+  DateTime? _tanggalMulai;
+  DateTime? _tanggalAkhir;
+  int? _unitId;
+  String? _metodePembayaran;
+  String? _statusTransaksi = 'selesai';
+
   @override
   void initState() {
     super.initState();
@@ -40,7 +44,11 @@ class _LaporanScreenState extends State<LaporanScreen> {
               elevation: 0,
               title: const Text('Laporan Finansial', style: TextStyle(color: AppTheme.primaryBlue, fontWeight: FontWeight.bold)),
               actions: [
-                IconButton(icon: const Icon(Icons.download_rounded, color: AppTheme.primaryBlue), onPressed: () {}),
+                IconButton(
+                  tooltip: 'Ekspor belum tersedia',
+                  icon: const Icon(Icons.download_rounded, color: AppTheme.textMuted),
+                  onPressed: null,
+                ),
               ],
             )
           : null,
@@ -57,6 +65,20 @@ class _LaporanScreenState extends State<LaporanScreen> {
                   children: [
                     if (!isMobile) _buildDesktopHeader(context),
                     const SizedBox(height: 24),
+                    _buildFilters(context),
+                    const SizedBox(height: 20),
+                    if (context.watch<LaporanProvider>().isLoading)
+                      const LinearProgressIndicator(),
+                    if (context.watch<LaporanProvider>().lastError != null)
+                      _buildError(context),
+                    if (!context.watch<LaporanProvider>().isLoading &&
+                        context.watch<LaporanProvider>().lastError == null &&
+                        context.watch<LaporanProvider>().summary.totalPemasukan == 0 &&
+                        context.watch<LaporanProvider>().summary.totalPengeluaran == 0)
+                      const Padding(
+                        padding: EdgeInsets.only(bottom: 16),
+                        child: Text('Tidak ada data pada filter periode ini.'),
+                      ),
                     _buildSummaryFinancialCards(context),
                     const SizedBox(height: 28),
                     _buildBreakdownSection(context, isMobile),
@@ -72,8 +94,6 @@ class _LaporanScreenState extends State<LaporanScreen> {
   }
 
   Widget _buildDesktopHeader(BuildContext context) {
-    final provider = context.watch<LaporanProvider>();
-
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -85,30 +105,132 @@ class _LaporanScreenState extends State<LaporanScreen> {
             Text('Konsolidasi pemasukan, beban operasional, dan kontribusi laba lintas unit.', style: TextStyle(fontSize: 14, color: AppTheme.textSecondary)),
           ],
         ),
-        Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              decoration: BoxDecoration(color: AppTheme.surfaceWhite, borderRadius: BorderRadius.circular(10), border: Border.all(color: AppTheme.cardBorder)),
-              child: DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: provider.periodeTerpilih,
-                  items: provider.daftarPeriode.map((p) => DropdownMenuItem(value: p, child: Text(p, style: const TextStyle(fontSize: 13)))).toList(),
-                  onChanged: (val) {
-                    if (val != null) provider.setPeriode(val);
-                  },
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            ElevatedButton.icon(
-              onPressed: () {},
-              icon: const Icon(Icons.file_download_outlined, size: 18),
-              label: const Text('Ekspor PDF / Excel'),
-            ),
-          ],
+        Tooltip(
+          message: 'Ekspor CSV/PDF/Excel belum tersedia',
+          child: ElevatedButton.icon(
+            onPressed: null,
+            icon: const Icon(Icons.file_download_outlined, size: 18),
+            label: const Text('Ekspor belum tersedia'),
+          ),
         ),
       ],
+    );
+  }
+
+  Widget _buildFilters(BuildContext context) {
+    final units = context.watch<UsahaProvider>().daftarUsaha;
+    final provider = context.watch<LaporanProvider>();
+    final dateFormat = DateFormat('dd MMM yyyy');
+    final paymentOptions = <String?>[null, 'Tunai', 'QRIS', 'Transfer Bank'];
+    final statusOptions = <String?>['selesai', 'dibatalkan'];
+
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        SizedBox(
+          width: 220,
+          child: DropdownButtonFormField<int?>(
+            value: _unitId,
+            decoration: const InputDecoration(labelText: 'Unit', border: OutlineInputBorder()),
+            items: [
+              const DropdownMenuItem<int?>(value: null, child: Text('Semua unit yang dapat diakses')),
+              ...units.map((unit) => DropdownMenuItem<int?>(
+                    value: unit.id,
+                    child: Text(unit.nama, overflow: TextOverflow.ellipsis),
+                  )),
+            ],
+            onChanged: (value) => setState(() => _unitId = value),
+          ),
+        ),
+        OutlinedButton.icon(
+          onPressed: () => _pickDate(context, start: true),
+          icon: const Icon(Icons.calendar_today, size: 16),
+          label: Text(_tanggalMulai == null ? 'Tanggal mulai' : dateFormat.format(_tanggalMulai!)),
+        ),
+        OutlinedButton.icon(
+          onPressed: () => _pickDate(context, start: false),
+          icon: const Icon(Icons.event, size: 16),
+          label: Text(_tanggalAkhir == null ? 'Tanggal akhir' : dateFormat.format(_tanggalAkhir!)),
+        ),
+        SizedBox(
+          width: 170,
+          child: DropdownButtonFormField<String?>(
+            value: _metodePembayaran,
+            decoration: const InputDecoration(labelText: 'Pembayaran', border: OutlineInputBorder()),
+            items: paymentOptions
+                .map((value) => DropdownMenuItem<String?>(
+                      value: value,
+                      child: Text(value ?? 'Semua metode'),
+                    ))
+                .toList(),
+            onChanged: (value) => setState(() => _metodePembayaran = value),
+          ),
+        ),
+        SizedBox(
+          width: 160,
+          child: DropdownButtonFormField<String?>(
+            value: _statusTransaksi,
+            decoration: const InputDecoration(labelText: 'Status', border: OutlineInputBorder()),
+            items: statusOptions
+                .map((value) => DropdownMenuItem<String?>(
+                      value: value,
+                      child: Text(value == 'selesai' ? 'Selesai' : 'Dibatalkan'),
+                    ))
+                .toList(),
+            onChanged: (value) => setState(() => _statusTransaksi = value),
+          ),
+        ),
+        ElevatedButton(
+          onPressed: provider.isLoading ? null : () => _loadFiltered(context),
+          child: const Text('Terapkan filter'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _pickDate(BuildContext context, {required bool start}) async {
+    final value = await showDatePicker(
+      context: context,
+      initialDate: (start ? _tanggalMulai : _tanggalAkhir) ?? DateTime.now(),
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
+    if (value != null && mounted) {
+      setState(() {
+        if (start) {
+          _tanggalMulai = value;
+        } else {
+          _tanggalAkhir = value;
+        }
+      });
+    }
+  }
+
+  Future<void> _loadFiltered(BuildContext context) async {
+    await context.read<LaporanProvider>().fetchLaporanFromApi(
+          unitId: _unitId,
+          tanggalMulai: _tanggalMulai,
+          tanggalAkhir: _tanggalAkhir,
+          metodePembayaran: _metodePembayaran,
+          statusTransaksi: _statusTransaksi,
+        );
+  }
+
+  Widget _buildError(BuildContext context) {
+    final provider = context.watch<LaporanProvider>();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Row(
+        children: [
+          Expanded(child: Text(provider.lastError!, style: const TextStyle(color: Colors.red))),
+          TextButton(
+            onPressed: provider.isLoading ? null : () => _loadFiltered(context),
+            child: const Text('Coba lagi'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -128,7 +250,7 @@ class _LaporanScreenState extends State<LaporanScreen> {
             _buildStatCard(
               title: 'Total Pemasukan Konsolidasi',
               value: currency.format(provider.summary.totalPemasukan),
-              subtext: 'Seluruh unit aktif',
+              subtext: 'Kotor ${currency.format(provider.summary.omzetKotor)} • Diskon ${currency.format(provider.summary.diskon)}',
               color: AppTheme.primaryBlue,
               bg: AppTheme.lightBlueBg,
               icon: Icons.account_balance_wallet_rounded,
@@ -137,7 +259,7 @@ class _LaporanScreenState extends State<LaporanScreen> {
             _buildStatCard(
               title: 'Total Beban & Pengeluaran',
               value: currency.format(provider.summary.totalPengeluaran),
-              subtext: 'Bahan baku, gaji & sewa',
+              subtext: 'HPP ${currency.format(provider.summary.hpp)} • Refund ${currency.format(provider.summary.refund)}',
               color: const Color(0xFFDC2626),
               bg: const Color(0xFFFEF2F2),
               icon: Icons.money_off_rounded,

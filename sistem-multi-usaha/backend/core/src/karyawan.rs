@@ -297,7 +297,8 @@ pub async fn update_karyawan(
                     StatusCode::FORBIDDEN,
                     Json(ApiResponse::<()> {
                         status: "error".to_string(),
-                        message: "Manager tidak dapat menaikkan jabatan menjadi Manager.".to_string(),
+                        message: "Manager tidak dapat menaikkan jabatan menjadi Manager."
+                            .to_string(),
                         data: None,
                     }),
                 )
@@ -308,51 +309,163 @@ pub async fn update_karyawan(
 
     if let Some(unit_ids) = &payload.unit_akses_ids {
         if unit_ids.is_empty() {
-            return (StatusCode::BAD_REQUEST, Json(ApiResponse::<()> {
-                status: "error".to_string(),
-                message: "Minimal satu unit harus dipilih.".to_string(),
-                data: None,
-            })).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse::<()> {
+                    status: "error".to_string(),
+                    message: "Minimal satu unit harus dipilih.".to_string(),
+                    data: None,
+                }),
+            )
+                .into_response();
         }
         let valid_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM business_units WHERE owner_id = $1 AND id = ANY($2)"
-        ).bind(owner_id as i32).bind(unit_ids.iter().map(|id| *id as i32).collect::<Vec<_>>())
-            .fetch_one(&state.db).await.unwrap_or(-1);
+            "SELECT COUNT(*) FROM business_units WHERE owner_id = $1 AND id = ANY($2)",
+        )
+        .bind(owner_id as i32)
+        .bind(unit_ids.iter().map(|id| *id as i32).collect::<Vec<_>>())
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(-1);
         if valid_count != unit_ids.len() as i64 {
-            return (StatusCode::FORBIDDEN, Json(ApiResponse::<()> {
-                status: "error".to_string(),
-                message: "Semua unit akses harus milik bisnis Anda.".to_string(),
-                data: None,
-            })).into_response();
+            return (
+                StatusCode::FORBIDDEN,
+                Json(ApiResponse::<()> {
+                    status: "error".to_string(),
+                    message: "Semua unit akses harus milik bisnis Anda.".to_string(),
+                    data: None,
+                }),
+            )
+                .into_response();
         }
     }
     let mut tx = match state.db.begin().await {
         Ok(tx) => tx,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()> {
-            status: "error".to_string(), message: "Gagal memulai perubahan karyawan.".to_string(), data: None,
-        })).into_response(),
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()> {
+                    status: "error".to_string(),
+                    message: "Gagal memulai perubahan karyawan.".to_string(),
+                    data: None,
+                }),
+            )
+                .into_response()
+        }
     };
     if let Some(nama) = &payload.nama {
         if let Err(_) = sqlx::query("UPDATE users SET nama = $1 WHERE id = $2 AND owner_id = $3")
-            .bind(nama).bind(id as i32).bind(owner_id as i32).execute(&mut *tx).await { let _ = tx.rollback().await; return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()> { status: "error".to_string(), message: "Gagal memperbarui karyawan.".to_string(), data: None })).into_response(); }
+            .bind(nama)
+            .bind(id as i32)
+            .bind(owner_id as i32)
+            .execute(&mut *tx)
+            .await
+        {
+            let _ = tx.rollback().await;
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()> {
+                    status: "error".to_string(),
+                    message: "Gagal memperbarui karyawan.".to_string(),
+                    data: None,
+                }),
+            )
+                .into_response();
+        }
     }
     if let Some(peran) = &payload.peran {
-        let role_str = match peran { PeranPengguna::Manager => "manager", PeranPengguna::Kasir => "kasir", PeranPengguna::AdminGudang => "admin_gudang", _ => "auditor" };
+        let role_str = match peran {
+            PeranPengguna::Manager => "manager",
+            PeranPengguna::Kasir => "kasir",
+            PeranPengguna::AdminGudang => "admin_gudang",
+            _ => "auditor",
+        };
         if let Err(_) = sqlx::query("UPDATE users SET role = $1 WHERE id = $2 AND owner_id = $3")
-            .bind(role_str).bind(id as i32).bind(owner_id as i32).execute(&mut *tx).await { let _ = tx.rollback().await; return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()> { status: "error".to_string(), message: "Gagal memperbarui role karyawan.".to_string(), data: None })).into_response(); }
+            .bind(role_str)
+            .bind(id as i32)
+            .bind(owner_id as i32)
+            .execute(&mut *tx)
+            .await
+        {
+            let _ = tx.rollback().await;
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()> {
+                    status: "error".to_string(),
+                    message: "Gagal memperbarui role karyawan.".to_string(),
+                    data: None,
+                }),
+            )
+                .into_response();
+        }
     }
     if let Some(active) = payload.is_active {
         if let Err(_) = sqlx::query("UPDATE users SET aktif = $1 WHERE id = $2 AND owner_id = $3")
-            .bind(active).bind(id as i32).bind(owner_id as i32).execute(&mut *tx).await { let _ = tx.rollback().await; return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()> { status: "error".to_string(), message: "Gagal memperbarui status karyawan.".to_string(), data: None })).into_response(); }
+            .bind(active)
+            .bind(id as i32)
+            .bind(owner_id as i32)
+            .execute(&mut *tx)
+            .await
+        {
+            let _ = tx.rollback().await;
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()> {
+                    status: "error".to_string(),
+                    message: "Gagal memperbarui status karyawan.".to_string(),
+                    data: None,
+                }),
+            )
+                .into_response();
+        }
     }
     if let Some(unit_ids) = &payload.unit_akses_ids {
-        if let Err(_) = sqlx::query("DELETE FROM user_units WHERE user_id = $1").bind(id as i32).execute(&mut *tx).await { let _ = tx.rollback().await; return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()> { status: "error".to_string(), message: "Gagal memperbarui unit akses.".to_string(), data: None })).into_response(); }
+        if let Err(_) = sqlx::query("DELETE FROM user_units WHERE user_id = $1")
+            .bind(id as i32)
+            .execute(&mut *tx)
+            .await
+        {
+            let _ = tx.rollback().await;
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<()> {
+                    status: "error".to_string(),
+                    message: "Gagal memperbarui unit akses.".to_string(),
+                    data: None,
+                }),
+            )
+                .into_response();
+        }
         for uid in unit_ids {
-            if let Err(_) = sqlx::query("INSERT INTO user_units (user_id, unit_id) VALUES ($1, $2)").bind(id as i32).bind(*uid as i32).execute(&mut *tx).await { let _ = tx.rollback().await; return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()> { status: "error".to_string(), message: "Gagal memperbarui unit akses.".to_string(), data: None })).into_response(); }
+            if let Err(_) = sqlx::query("INSERT INTO user_units (user_id, unit_id) VALUES ($1, $2)")
+                .bind(id as i32)
+                .bind(*uid as i32)
+                .execute(&mut *tx)
+                .await
+            {
+                let _ = tx.rollback().await;
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiResponse::<()> {
+                        status: "error".to_string(),
+                        message: "Gagal memperbarui unit akses.".to_string(),
+                        data: None,
+                    }),
+                )
+                    .into_response();
+            }
         }
     }
     if let Err(_) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<()> { status: "error".to_string(), message: "Gagal menyimpan perubahan karyawan.".to_string(), data: None })).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<()> {
+                status: "error".to_string(),
+                message: "Gagal menyimpan perubahan karyawan.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
     }
 
     (

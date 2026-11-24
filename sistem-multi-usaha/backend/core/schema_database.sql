@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS inventories (
     unit_id INT NOT NULL REFERENCES business_units(id) ON DELETE CASCADE,
     product_id INT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
     qty INT NOT NULL DEFAULT 0,
+    reserved_qty INT NOT NULL DEFAULT 0 CHECK (reserved_qty >= 0),
     min_stock INT NOT NULL DEFAULT 5,
     lokasi_rak VARCHAR(50),
     created_at TIMESTAMP NOT NULL DEFAULT now(),
@@ -114,6 +115,38 @@ CREATE TABLE IF NOT EXISTS transaction_items (
 
 CREATE INDEX IF NOT EXISTS ix_transaction_items_trx_id ON transaction_items(trx_id);
 
+CREATE TABLE IF NOT EXISTS transaction_refunds (
+    id SERIAL PRIMARY KEY,
+    transaction_id INT NOT NULL REFERENCES transactions(id) ON DELETE RESTRICT,
+    owner_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    unit_id INT NOT NULL REFERENCES business_units(id) ON DELETE CASCADE,
+    jenis VARCHAR(20) NOT NULL CHECK (jenis IN ('refund', 'void')),
+    status VARCHAR(20) NOT NULL DEFAULT 'selesai',
+    alasan TEXT NOT NULL,
+    jumlah NUMERIC(14,2) NOT NULL CHECK (jumlah > 0),
+    aktor_id INT REFERENCES users(id) ON DELETE SET NULL,
+    aktor VARCHAR(150) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ix_transaction_refunds_transaction
+    ON transaction_refunds(transaction_id, created_at);
+
+CREATE TABLE IF NOT EXISTS transaction_refund_items (
+    id SERIAL PRIMARY KEY,
+    refund_id INT NOT NULL REFERENCES transaction_refunds(id) ON DELETE RESTRICT,
+    transaction_item_id INT NOT NULL REFERENCES transaction_items(id) ON DELETE RESTRICT,
+    product_id INT REFERENCES products(id) ON DELETE SET NULL,
+    item_name VARCHAR(150) NOT NULL,
+    item_type VARCHAR(30) NOT NULL,
+    qty INT NOT NULL CHECK (qty > 0),
+    jumlah NUMERIC(14,2) NOT NULL CHECK (jumlah > 0),
+    UNIQUE (refund_id, transaction_item_id)
+);
+
+CREATE INDEX IF NOT EXISTS ix_transaction_refund_items_source
+    ON transaction_refund_items(transaction_item_id);
+
 CREATE TABLE IF NOT EXISTS cash_flows (
     id SERIAL PRIMARY KEY,
     unit_id INT NOT NULL REFERENCES business_units(id) ON DELETE CASCADE,
@@ -137,6 +170,17 @@ CREATE TABLE IF NOT EXISTS stock_movements (
     dicatat_oleh INT REFERENCES users(id) ON DELETE SET NULL,
     status VARCHAR(20) NOT NULL DEFAULT 'diterima',
     waktu_terima TIMESTAMP,
+    diminta_oleh INT REFERENCES users(id) ON DELETE SET NULL,
+    disetujui_oleh INT REFERENCES users(id) ON DELETE SET NULL,
+    waktu_persetujuan TIMESTAMP,
+    dikirim_oleh INT REFERENCES users(id) ON DELETE SET NULL,
+    waktu_pengiriman TIMESTAMP,
+    diterima_oleh INT REFERENCES users(id) ON DELETE SET NULL,
+    ditolak_oleh INT REFERENCES users(id) ON DELETE SET NULL,
+    waktu_penolakan TIMESTAMP,
+    alasan_penolakan TEXT,
+    dibatalkan_oleh INT REFERENCES users(id) ON DELETE SET NULL,
+    waktu_pembatalan TIMESTAMP,
     created_at TIMESTAMP NOT NULL DEFAULT now()
 );
 

@@ -69,7 +69,7 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
           TextButton.icon(
             onPressed: () => _showImportDialog(context),
             icon: const Icon(Icons.upload_file_rounded, size: 18, color: AppTheme.primaryBlue),
-            label: const Text('Impor CSV/XLSX', style: TextStyle(color: AppTheme.primaryBlue, fontWeight: FontWeight.bold)),
+            label: const Text('Impor CSV (segera)', style: TextStyle(color: AppTheme.primaryBlue, fontWeight: FontWeight.bold)),
           ),
           if (isAdminGudang)
             IconButton(
@@ -105,19 +105,17 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
       floatingActionButton: FloatingActionButton.extended(
         backgroundColor: AppTheme.primaryBlue,
         foregroundColor: Colors.white,
-        onPressed: () {
+        onPressed: _tabController.index == 2 ? null : () {
           if (_tabController.index == 0) {
             _showKirimTransferDialog(context);
           } else if (_tabController.index == 1) {
             _showCatatOpnameDialog(context);
-          } else {
-            _showCatatMutasiDialog(context);
           }
         },
         icon: const Icon(Icons.add),
         label: Text(_tabController.index == 0
             ? 'Kirim Transfer Stok'
-            : (_tabController.index == 1 ? 'Input Stok Opname' : 'Catat Mutasi Barang')),
+            : (_tabController.index == 1 ? 'Input Stok Opname' : 'Mutasi (preview saja)')),
       ),
     );
   }
@@ -159,7 +157,9 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
                     decoration: BoxDecoration(
                       color: isPending
                           ? const Color(0xFFFEF3C7)
-                          : (t.status == StatusTransfer.diterima ? AppTheme.lightGreenBg : const Color(0xFFFEF2F2)),
+                          : (t.status == StatusTransfer.diterima || t.status == StatusTransfer.disetujui || t.status == StatusTransfer.dikirim
+                              ? AppTheme.lightGreenBg
+                              : const Color(0xFFFEF2F2)),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Text(
@@ -169,7 +169,9 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
                         fontWeight: FontWeight.bold,
                         color: isPending
                             ? const Color(0xFFD97706)
-                            : (t.status == StatusTransfer.diterima ? AppTheme.accentGreen : const Color(0xFFDC2626)),
+                            : (t.status == StatusTransfer.diterima || t.status == StatusTransfer.disetujui || t.status == StatusTransfer.dikirim
+                                ? AppTheme.accentGreen
+                                : const Color(0xFFDC2626)),
                       ),
                     ),
                   ),
@@ -208,17 +210,59 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
                     Row(
                       children: [
                         OutlinedButton(
-                          onPressed: () => gudang.tolakTransfer(t.id),
+                          onPressed: () => _showRejectionDialog(context, t.id),
                           style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFFDC2626)),
                           child: const Text('Tolak'),
                         ),
+                        TextButton(
+                          onPressed: () => _runTransferAction(
+                            context,
+                            () => gudang.batalkanTransfer(t.id),
+                            'Permintaan transfer dibatalkan.',
+                          ),
+                          child: const Text('Batalkan'),
+                        ),
                         const SizedBox(width: 8),
                         ElevatedButton(
-                          onPressed: () => gudang.konfirmasiPenerimaan(t.id),
+                          onPressed: () => _runTransferAction(
+                            context,
+                            () => gudang.setujuiTransfer(t.id),
+                            'Permintaan transfer disetujui.',
+                          ),
                           style: ElevatedButton.styleFrom(backgroundColor: AppTheme.accentGreen),
-                          child: const Text('Konfirmasi Diterima'),
+                          child: const Text('Setujui'),
                         ),
                       ],
+                    ),
+                  if (t.status == StatusTransfer.disetujui)
+                    Row(
+                      children: [
+                        TextButton(
+                          onPressed: () => _runTransferAction(
+                            context,
+                            () => gudang.batalkanTransfer(t.id),
+                            'Transfer dibatalkan dan reservasi dilepas.',
+                          ),
+                          child: const Text('Batalkan'),
+                        ),
+                        ElevatedButton(
+                          onPressed: () => _runTransferAction(
+                            context,
+                            () => gudang.kirimTransfer(t.id),
+                            'Stok asal telah dikurangi dan transfer dikirim.',
+                          ),
+                          child: const Text('Kirim'),
+                        ),
+                      ],
+                    ),
+                  if (t.status == StatusTransfer.dikirim)
+                    ElevatedButton(
+                      onPressed: () => _runTransferAction(
+                        context,
+                        () => gudang.konfirmasiPenerimaan(t.id),
+                        'Penerimaan transfer berhasil dicatat.',
+                      ),
+                      child: const Text('Konfirmasi Diterima'),
                     ),
                 ],
               ),
@@ -226,6 +270,55 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
           ),
         );
       },
+    );
+  }
+
+  Future<void> _runTransferAction(
+    BuildContext context,
+    Future<bool> Function() action,
+    String successMessage,
+  ) async {
+    final success = await action();
+    if (!context.mounted) return;
+    final error = context.read<GudangProvider>().lastError;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(success ? successMessage : (error ?? 'Aksi transfer gagal.'))),
+    );
+  }
+
+  Future<void> _showRejectionDialog(BuildContext context, int id) async {
+    final reasonController = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Tolak transfer stok'),
+        content: TextField(
+          controller: reasonController,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Alasan penolakan'),
+          maxLines: 3,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Batal'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final value = reasonController.text.trim();
+              if (value.isNotEmpty) Navigator.pop(dialogContext, value);
+            },
+            child: const Text('Tolak'),
+          ),
+        ],
+      ),
+    );
+    reasonController.dispose();
+    if (reason == null || !context.mounted) return;
+    await _runTransferAction(
+      context,
+      () => context.read<GudangProvider>().tolakTransfer(id, alasan: reason),
+      'Permintaan transfer ditolak.',
     );
   }
 
@@ -298,6 +391,15 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
     final gudang = context.watch<GudangProvider>();
     final dateFormat = DateFormat('dd MMM yyyy, HH:mm');
 
+    if (gudang.daftarMutasi.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text('Mutasi manual belum tersedia. Data stok hanya berubah melalui transaksi backend yang tercatat.'),
+        ),
+      );
+    }
+
     return ListView.separated(
       padding: EdgeInsets.symmetric(horizontal: isMobile ? 16 : 32, vertical: 20),
       itemCount: gudang.daftarMutasi.length,
@@ -365,7 +467,7 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Impor Master Produk & Stok', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text('Impor produk belum tersedia', style: TextStyle(fontWeight: FontWeight.bold)),
         content: SizedBox(
           width: 380,
           child: Column(
@@ -382,9 +484,7 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
                   children: const [
                     Icon(Icons.file_upload_outlined, size: 40, color: AppTheme.primaryBlue),
                     SizedBox(height: 8),
-                    Text('Pilih file CSV atau XLSX dari komputer', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                    SizedBox(height: 4),
-                    Text('Format: SKU, Nama, Harga Beli, Harga Jual, Stok', style: TextStyle(fontSize: 11, color: AppTheme.textMuted)),
+                    Text('Import dinonaktifkan sampai pemilih file, validasi, dan penyimpanan batch tersedia.', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13), textAlign: TextAlign.center),
                   ],
                 ),
               ),
@@ -393,13 +493,7 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File berhasil diimpor! 45 data produk diperbarui.')));
-            },
-            child: const Text('Mulai Impor'),
-          ),
+          const ElevatedButton(onPressed: null, child: Text('Impor dinonaktifkan')),
         ],
       ),
     );
@@ -407,11 +501,14 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
 
   void _showKirimTransferDialog(BuildContext context) {
     final qtyCtrl = TextEditingController();
-    final produkList = context.read<ProdukProvider>().daftarProduk;
-    final unitList = context.read<UsahaProvider>().daftarUsaha;
     final unitId = context.read<AuthProvider>().selectedUnitId;
+    if (unitId == null) return;
+    final produkList = context.read<ProdukProvider>().daftarProduk
+        .where((product) => product.unitId == unitId)
+        .toList();
+    final unitList = context.read<UsahaProvider>().daftarUsaha;
     final tujuanList = unitList.where((u) => u.id != unitId).toList();
-    if (produkList.isEmpty || unitId == null || tujuanList.isEmpty) return;
+    if (produkList.isEmpty || tujuanList.isEmpty) return;
     int selectedProduk = produkList.first.id;
     int selectedTujuan = tujuanList.first.id;
 
@@ -451,7 +548,7 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
                 ));
                 if (!ctx.mounted) return;
                 Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? 'Transfer stok berhasil dikirim.' : (context.read<GudangProvider>().lastError ?? 'Transfer stok gagal.'))));
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(ok ? 'Permintaan transfer stok berhasil diajukan.' : (context.read<GudangProvider>().lastError ?? 'Transfer stok gagal.'))));
               },
               child: const Text('Kirim'),
             ),
@@ -504,66 +601,4 @@ class _GudangScreenState extends State<GudangScreen> with SingleTickerProviderSt
     );
   }
 
-  void _showCatatMutasiDialog(BuildContext context) {
-    final qtyCtrl = TextEditingController();
-    final sumberCtrl = TextEditingController();
-    final products = context.read<ProdukProvider>().daftarProduk;
-    if (products.isEmpty) return;
-    int selectedProduct = products.first.id;
-    String jenis = 'MASUK';
-
-    showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Text('Catat Barang Masuk / Keluar', style: TextStyle(fontWeight: FontWeight.bold)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              DropdownButtonFormField<String>(
-                value: jenis,
-                decoration: const InputDecoration(labelText: 'Jenis Mutasi', border: OutlineInputBorder()),
-                items: const [
-                  DropdownMenuItem(value: 'MASUK', child: Text('Barang Masuk (Pemasok)')),
-                  DropdownMenuItem(value: 'KELUAR', child: Text('Barang Keluar (Operasional)')),
-                ],
-                onChanged: (val) => setState(() => jenis = val!),
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<int>(
-                value: selectedProduct,
-                decoration: const InputDecoration(labelText: 'Pilih Produk', border: OutlineInputBorder()),
-                items: products.map((p) => DropdownMenuItem(value: p.id, child: Text(p.nama))).toList(),
-                onChanged: (value) => setState(() => selectedProduct = value!),
-              ),
-              const SizedBox(height: 12),
-              TextField(controller: qtyCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Jumlah Unit', border: OutlineInputBorder())),
-              const SizedBox(height: 12),
-              TextField(controller: sumberCtrl, decoration: const InputDecoration(labelText: 'Sumber / Pemasok / Pengguna', border: OutlineInputBorder())),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
-            ElevatedButton(
-              onPressed: () {
-                Provider.of<GudangProvider>(context, listen: false).catatMutasi(
-                  MutasiStokModel(
-                    id: DateTime.now().millisecondsSinceEpoch,
-                    jenis: jenis,
-                    namaProduk: products.firstWhere((p) => p.id == selectedProduct).nama,
-                    jumlah: int.tryParse(qtyCtrl.text) ?? 0,
-                    sumberTujuan: sumberCtrl.text.isEmpty ? 'Pemasok Umum' : sumberCtrl.text,
-                    tanggal: DateTime.now(),
-                  ),
-                );
-                Navigator.pop(ctx);
-              },
-              child: const Text('Simpan Mutasi'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }

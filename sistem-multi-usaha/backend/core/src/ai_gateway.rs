@@ -85,7 +85,10 @@ pub async fn forward_ai_request(
                 }
                 Err(err) => {
                     tracing::warn!("Gagal membaca respons AI service: {}", err);
-                    ai_error(StatusCode::BAD_GATEWAY, "Respons AI service tidak dapat dibaca.")
+                    ai_error(
+                        StatusCode::BAD_GATEWAY,
+                        "Respons AI service tidak dapat dibaca.",
+                    )
                 }
             }
         }

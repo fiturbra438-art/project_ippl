@@ -328,7 +328,6 @@ class _AiHubScreenState extends State<AiHubScreen>
       separatorBuilder: (_, __) => const SizedBox(height: 14),
       itemBuilder: (context, index) {
         final r = ai.daftarRealokasi[index];
-        final isPending = r.status == StatusRekomendasi.pending;
 
         return Container(
           padding: const EdgeInsets.all(20),
@@ -413,29 +412,11 @@ class _AiHubScreenState extends State<AiHubScreen>
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   const Text(
-                      'Sifat: Penasihat (Stok hanya berpindah setelah Anda setujui)',
+                      'Preview rekomendasi saja; perubahan stok belum didukung.',
                       style: TextStyle(
                           fontSize: 11,
                           fontStyle: FontStyle.italic,
                           color: AppTheme.textMuted)),
-                  if (isPending)
-                    Row(
-                      children: [
-                        OutlinedButton(
-                          onPressed: () => ai.tolakRealokasiStok(r.id),
-                          style: OutlinedButton.styleFrom(
-                              foregroundColor: const Color(0xFFDC2626)),
-                          child: const Text('Tolak'),
-                        ),
-                        const SizedBox(width: 8),
-                        ElevatedButton(
-                          onPressed: () => ai.setujuiRealokasiStok(r.id),
-                          style: ElevatedButton.styleFrom(
-                              backgroundColor: AppTheme.accentGreen),
-                          child: const Text('Setujui Realokasi'),
-                        ),
-                      ],
-                    ),
                 ],
               ),
             ],
@@ -570,15 +551,9 @@ class _AiHubScreenState extends State<AiHubScreen>
                           fontWeight: FontWeight.bold,
                           color: Color(0xFFDC2626))),
                   if (!a.isDiselesaikan)
-                    ElevatedButton.icon(
-                      onPressed: () {
-                        ai.selesaikanAnomali(a.id);
-                        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                            content: Text(
-                                'Kasus anomali ditandai telah ditelusuri & ditindaklanjuti.')));
-                      },
-                      icon: const Icon(Icons.check, size: 16),
-                      label: const Text('Tindak Lanjuti'),
+                    const Text(
+                      'Preview saja; status tindak lanjut belum tersimpan.',
+                      style: TextStyle(fontSize: 11, color: AppTheme.textMuted),
                     ),
                 ],
               ),
@@ -730,15 +705,9 @@ class _AiHubScreenState extends State<AiHubScreen>
                 Align(
                   alignment: Alignment.centerRight,
                   child: ElevatedButton.icon(
-                    onPressed: () {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                            content: Text(
-                                'Alokasi modal ${ai.persenAlokasiSurplus.toInt()}% (${currency.format(ai.modalDialokasikan)}) disetujui & dicatat ke rencana anggaran!')),
-                      );
-                    },
+                    onPressed: null,
                     icon: const Icon(Icons.check_circle_outline_rounded),
-                    label: const Text('Eksekusi Skenario Alokasi Modal'),
+                    label: const Text('Eksekusi dinonaktifkan — preview saja'),
                   ),
                 ),
               ],

@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import '../models/permintaan_stok_model.dart';
 import '../providers/permintaan_stok_provider.dart';
 import '../providers/produk_provider.dart';
+import '../providers/auth_provider.dart';
+import '../providers/usaha_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
 import 'dashboard_screen.dart';
@@ -84,13 +86,13 @@ class _PermintaanStokScreenState extends State<PermintaanStokScreen> {
                       Row(
                         children: [
                           OutlinedButton(
-                            onPressed: () => provider.tolakPermintaan(p.id),
+                            onPressed: () => _updateStatus(context, p.id, approve: false),
                             style: OutlinedButton.styleFrom(foregroundColor: const Color(0xFFDC2626)),
                             child: const Text('Tolak'),
                           ),
                           const SizedBox(width: 8),
                           ElevatedButton(
-                            onPressed: () => provider.setujuiPermintaan(p.id),
+                            onPressed: () => _updateStatus(context, p.id, approve: true),
                             style: ElevatedButton.styleFrom(backgroundColor: AppTheme.accentGreen),
                             child: const Text('Setujui Restok'),
                           ),
@@ -136,10 +138,30 @@ class _PermintaanStokScreenState extends State<PermintaanStokScreen> {
   }
 
   void _showAjukanPermintaanDialog(BuildContext context) {
-    final qtyCtrl = TextEditingController(text: '25');
+    final qtyCtrl = TextEditingController();
     final alasanCtrl = TextEditingController();
-    final produkList = Provider.of<ProdukProvider>(context, listen: false).daftarProduk;
-    String selectedProduk = produkList.isNotEmpty ? produkList.first.nama : 'Biji Kopi Arabika 1kg';
+    final unitList = context.read<UsahaProvider>().rawDaftarUsaha;
+    if (unitList.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Tidak ada unit yang dapat dipilih.')),
+      );
+      return;
+    }
+    final selectedUnitId = context.read<AuthProvider>().selectedUnitId;
+    final unit = unitList.firstWhere(
+      (item) => item.id == selectedUnitId,
+      orElse: () => unitList.first,
+    );
+    final produkList = context.read<ProdukProvider>().daftarProduk
+        .where((product) => product.unitId == unit.id)
+        .toList();
+    if (produkList.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Tidak ada produk untuk unit ini.')),
+      );
+      return;
+    }
+    String selectedProduk = produkList.first.nama;
 
     showDialog(
       context: context,
@@ -151,7 +173,7 @@ class _PermintaanStokScreenState extends State<PermintaanStokScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               DropdownButtonFormField<String>(
-                value: selectedProduk,
+                initialValue: selectedProduk,
                 decoration: const InputDecoration(labelText: 'Pilih Produk', border: OutlineInputBorder()),
                 items: produkList.map((p) => DropdownMenuItem(value: p.nama, child: Text(p.nama))).toList(),
                 onChanged: (val) => setState(() => selectedProduk = val!),
@@ -165,25 +187,56 @@ class _PermintaanStokScreenState extends State<PermintaanStokScreen> {
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
             ElevatedButton(
-              onPressed: () {
-                Provider.of<PermintaanStokProvider>(context, listen: false).ajukanPermintaan(
+              onPressed: () async {
+                final provider = context.read<PermintaanStokProvider>();
+                final success = await provider.ajukanPermintaan(
                   PermintaanStokModel(
-                    id: DateTime.now().millisecondsSinceEpoch,
-                    unitId: 1,
-                    namaUnit: 'Kedai Kopi Bahagia',
-                    pemohon: 'Manager Unit',
+                    id: 0,
+                    unitId: unit.id,
+                    namaUnit: unit.nama,
+                    pemohon: '',
                     namaProduk: selectedProduk,
-                    jumlahDiminta: int.tryParse(qtyCtrl.text) ?? 20,
-                    alasan: alasanCtrl.text.isEmpty ? 'Kebutuhan operasional mendesak' : alasanCtrl.text,
+                    jumlahDiminta: int.tryParse(qtyCtrl.text) ?? 0,
+                    alasan: alasanCtrl.text.trim(),
                     waktuPengajuan: DateTime.now(),
                   ),
                 );
-                Navigator.pop(ctx);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Permintaan terkirim ke Owner & Admin Gudang!')));
+                if (!ctx.mounted) return;
+                if (success) Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      success
+                          ? 'Permintaan stok berhasil dikirim.'
+                          : (provider.lastError ?? 'Gagal mengirim permintaan stok.'),
+                    ),
+                  ),
+                );
               },
               child: const Text('Kirim Pengajuan'),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _updateStatus(
+    BuildContext context,
+    int id, {
+    required bool approve,
+  }) async {
+    final provider = context.read<PermintaanStokProvider>();
+    final success = approve
+        ? await provider.setujuiPermintaan(id)
+        : await provider.tolakPermintaan(id);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success
+              ? (approve ? 'Permintaan disetujui.' : 'Permintaan ditolak.')
+              : (provider.lastError ?? 'Gagal memperbarui permintaan.'),
         ),
       ),
     );

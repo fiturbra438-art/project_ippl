@@ -41,6 +41,10 @@ pub struct KonsolidasiDashboardResponse {
 #[derive(Debug, Deserialize)]
 pub struct LaporanQuery {
     pub unit_id: Option<i64>,
+    pub tanggal_mulai: Option<chrono::NaiveDate>,
+    pub tanggal_akhir: Option<chrono::NaiveDate>,
+    pub metode_pembayaran: Option<String>,
+    pub status_transaksi: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -54,6 +58,12 @@ pub struct LaporanKeuanganResponse {
     pub total_pemasukan: f64,
     pub total_pengeluaran: f64,
     pub arus_kas_bersih: f64,
+    pub omzet_kotor: f64,
+    pub diskon: f64,
+    pub refund: f64,
+    pub omzet_bersih: f64,
+    pub hpp: f64,
+    pub laba_kotor: f64,
     pub rincian_pemasukan_per_kategori: Vec<KategoriSummary>,
     pub rincian_pengeluaran_per_kategori: Vec<KategoriSummary>,
 }
@@ -139,8 +149,7 @@ pub async fn get_dashboard_summary(
         .await
         .unwrap_or(None);
 
-        let pendapatan =
-            pendapatan_pos + cash_masuk.and_then(|d| d.to_f64()).unwrap_or(0.0);
+        let pendapatan = pendapatan_pos + cash_masuk.and_then(|d| d.to_f64()).unwrap_or(0.0);
         let pengeluaran = cash_keluar.and_then(|d| d.to_f64()).unwrap_or(0.0);
         let laba = pendapatan - pengeluaran;
         let margin = if pendapatan > 0.0 {
@@ -223,112 +232,144 @@ pub async fn get_laporan_keuangan(
     let owner_id = claims.owner_id;
 
     if let Some(uid) = query.unit_id {
-        if let Err(err) = ensure_unit_access(&state, &claims, uid).await { return err; }
-    }
-    let scoped_ids = if query.unit_id.is_none() && !["owner", "auditor"].contains(&claims.role.as_str()) {
-        match accessible_unit_ids(&state, &claims).await {
-            Ok(ids) => Some(ids),
-            Err(err) => return err,
+        if let Err(err) = ensure_unit_access(&state, &claims, uid).await {
+            return err;
         }
-    } else {
-        None
+    }
+    if query
+        .tanggal_mulai
+        .zip(query.tanggal_akhir)
+        .is_some_and(|(start, end)| start > end)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<LaporanKeuanganResponse> {
+                status: "error".to_string(),
+                message: "Tanggal mulai tidak boleh setelah tanggal akhir.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
+    let scoped_ids =
+        if query.unit_id.is_none() && !["owner", "auditor"].contains(&claims.role.as_str()) {
+            match accessible_unit_ids(&state, &claims).await {
+                Ok(ids) => Some(ids),
+                Err(error) => return error,
+            }
+        } else {
+            None
+        };
+    let selected_status = query.status_transaksi.as_deref().or(Some("selesai"));
+    let rows = sqlx::query_as::<
+        _,
+        (
+            rust_decimal::Decimal,
+            String,
+            rust_decimal::Decimal,
+            rust_decimal::Decimal,
+        ),
+    >(
+        "SELECT t.total, t.metode_bayar,
+                COALESCE((SELECT SUM(ti.harga_satuan * ti.qty)
+                          FROM transaction_items ti WHERE ti.trx_id = t.id), t.total),
+                COALESCE((SELECT SUM(p.harga_beli * ti.qty)
+                          FROM transaction_items ti
+                          JOIN products p ON p.id = ti.product_id
+                          WHERE ti.trx_id = t.id AND ti.item_type = 'barang'), 0)
+         FROM transactions t
+         JOIN business_units u ON u.id = t.unit_id
+         WHERE u.owner_id = $1
+           AND ($2::INT IS NULL OR t.unit_id = $2)
+           AND ($3::DATE IS NULL OR t.tanggal >= $3::DATE)
+           AND ($4::DATE IS NULL OR t.tanggal < ($4::DATE + INTERVAL '1 day'))
+           AND ($5::TEXT IS NULL OR t.metode_bayar = $5)
+           AND ($6::TEXT IS NULL OR t.status = $6)
+           AND ($7::INT[] IS NULL OR t.unit_id = ANY($7))
+         ORDER BY t.tanggal, t.id",
+    )
+    .bind(owner_id as i32)
+    .bind(query.unit_id.map(|unit_id| unit_id as i32))
+    .bind(query.tanggal_mulai)
+    .bind(query.tanggal_akhir)
+    .bind(query.metode_pembayaran.as_deref())
+    .bind(selected_status)
+    .bind(scoped_ids.as_deref())
+    .fetch_all(&state.db)
+    .await;
+    let rows = match rows {
+        Ok(rows) => rows,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<LaporanKeuanganResponse> {
+                    status: "error".to_string(),
+                    message: format!("Gagal mengambil transaksi laporan: {error}"),
+                    data: None,
+                }),
+            )
+                .into_response()
+        }
     };
-
-    let rows = if let Some(uid) = query.unit_id {
-        sqlx::query_as::<_, (rust_decimal::Decimal, String)>(
-            "SELECT t.total, t.metode_bayar 
-             FROM transactions t
-             JOIN business_units u ON t.unit_id = u.id
-             WHERE u.owner_id = $1 AND t.unit_id = $2 AND t.status = 'selesai'",
-        )
-        .bind(owner_id as i32)
-        .bind(uid as i32)
-        .fetch_all(&state.db)
-        .await
-    } else if let Some(ids) = &scoped_ids {
-        sqlx::query_as::<_, (rust_decimal::Decimal, String)>(
-            "SELECT t.total, t.metode_bayar
-             FROM transactions t
-             JOIN business_units u ON t.unit_id = u.id
-             WHERE u.owner_id = $1 AND t.status = 'selesai' AND t.unit_id = ANY($2)",
-        )
-        .bind(owner_id as i32)
-        .bind(ids)
-        .fetch_all(&state.db)
-        .await
-    } else {
-        sqlx::query_as::<_, (rust_decimal::Decimal, String)>(
-            "SELECT t.total, t.metode_bayar 
-             FROM transactions t
-             JOIN business_units u ON t.unit_id = u.id
-             WHERE u.owner_id = $1 AND t.status = 'selesai'",
-        )
-        .bind(owner_id as i32)
-        .fetch_all(&state.db)
-        .await
+    let cash_rows = sqlx::query_as::<_, (String, String, rust_decimal::Decimal)>(
+        "SELECT c.jenis, c.kategori, c.jumlah
+         FROM cash_flows c
+         JOIN business_units u ON u.id = c.unit_id
+         WHERE u.owner_id = $1
+           AND ($2::INT IS NULL OR c.unit_id = $2)
+           AND ($3::DATE IS NULL OR c.tanggal >= $3::DATE)
+           AND ($4::DATE IS NULL OR c.tanggal <= $4::DATE)
+           AND ($5::INT[] IS NULL OR c.unit_id = ANY($5))
+           AND c.kategori <> 'Penjualan POS'",
+    )
+    .bind(owner_id as i32)
+    .bind(query.unit_id.map(|unit_id| unit_id as i32))
+    .bind(query.tanggal_mulai)
+    .bind(query.tanggal_akhir)
+    .bind(scoped_ids.as_deref())
+    .fetch_all(&state.db)
+    .await;
+    let cash_rows = match cash_rows {
+        Ok(rows) => rows,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<LaporanKeuanganResponse> {
+                    status: "error".to_string(),
+                    message: format!("Gagal mengambil arus kas laporan: {error}"),
+                    data: None,
+                }),
+            )
+                .into_response()
+        }
     };
-
-    // Mutasi manual dari cash_flows (masuk & keluar)
-    let cash_rows = if let Some(uid) = query.unit_id {
-        sqlx::query_as::<_, (String, String, rust_decimal::Decimal)>(
-            "SELECT c.jenis, c.kategori, c.jumlah
-             FROM cash_flows c
-             JOIN business_units u ON u.id = c.unit_id
-             WHERE u.owner_id = $1 AND c.unit_id = $2",
-        )
-        .bind(owner_id as i32)
-        .bind(uid as i32)
-        .fetch_all(&state.db)
-        .await
-    } else if let Some(ids) = &scoped_ids {
-        sqlx::query_as::<_, (String, String, rust_decimal::Decimal)>(
-            "SELECT c.jenis, c.kategori, c.jumlah
-             FROM cash_flows c
-             JOIN business_units u ON u.id = c.unit_id
-             WHERE u.owner_id = $1 AND c.unit_id = ANY($2)",
-        )
-        .bind(owner_id as i32)
-        .bind(ids)
-        .fetch_all(&state.db)
-        .await
-    } else {
-        sqlx::query_as::<_, (String, String, rust_decimal::Decimal)>(
-            "SELECT c.jenis, c.kategori, c.jumlah
-             FROM cash_flows c
-             JOIN business_units u ON u.id = c.unit_id
-             WHERE u.owner_id = $1",
-        )
-        .bind(owner_id as i32)
-        .fetch_all(&state.db)
-        .await
-    };
-
-    let mut total_pemasukan = 0.0;
     let mut total_pengeluaran = 0.0;
     use std::collections::HashMap;
     let mut map_pemasukan: HashMap<String, f64> = HashMap::new();
     let mut map_pengeluaran: HashMap<String, f64> = HashMap::new();
+    let mut omzet_kotor = 0.0;
+    let mut omzet_bersih = 0.0;
+    let mut hpp = 0.0;
 
-    if let Ok(trxs) = rows {
-        for (total_dec, metode) in trxs {
-            let jml = total_dec.to_f64().unwrap_or(0.0);
-            total_pemasukan += jml;
-            *map_pemasukan
-                .entry(format!("Penjualan ({})", metode))
-                .or_insert(0.0) += jml;
-        }
+    for (total_dec, metode, gross_dec, hpp_dec) in rows {
+        let jml = total_dec.to_f64().unwrap_or_default();
+        omzet_bersih += jml;
+        omzet_kotor += gross_dec.to_f64().unwrap_or_default();
+        hpp += hpp_dec.to_f64().unwrap_or_default();
+        *map_pemasukan
+            .entry(format!("Penjualan ({})", metode))
+            .or_insert(0.0) += jml;
     }
+    let mut total_pemasukan = omzet_bersih;
 
-    if let Ok(list) = cash_rows {
-        for (jenis, kategori, jumlah) in list {
-            let jml = jumlah.to_f64().unwrap_or(0.0);
-            if jenis.eq_ignore_ascii_case("masuk") {
-                total_pemasukan += jml;
-                *map_pemasukan.entry(kategori).or_insert(0.0) += jml;
-            } else {
-                total_pengeluaran += jml;
-                *map_pengeluaran.entry(kategori).or_insert(0.0) += jml;
-            }
+    for (jenis, kategori, jumlah) in cash_rows {
+        let jml = jumlah.to_f64().unwrap_or(0.0);
+        if jenis.eq_ignore_ascii_case("masuk") {
+            total_pemasukan += jml;
+            *map_pemasukan.entry(kategori).or_insert(0.0) += jml;
+        } else {
+            total_pengeluaran += jml;
+            *map_pengeluaran.entry(kategori).or_insert(0.0) += jml;
         }
     }
 
@@ -345,6 +386,12 @@ pub async fn get_laporan_keuangan(
         total_pemasukan,
         total_pengeluaran,
         arus_kas_bersih: total_pemasukan - total_pengeluaran,
+        omzet_kotor,
+        diskon: (omzet_kotor - omzet_bersih).max(0.0),
+        refund: 0.0,
+        omzet_bersih,
+        hpp,
+        laba_kotor: omzet_bersih - hpp,
         rincian_pemasukan_per_kategori,
         rincian_pengeluaran_per_kategori,
     };

@@ -338,10 +338,18 @@ class UsahaScreen extends StatelessWidget {
                       size: 20,
                       color: usaha.hasPos ? AppTheme.primaryBlue : AppTheme.textMuted,
                     ),
-                    onPressed: () {
-                      context.read<UsahaProvider>().toggleHasPos(usaha.id);
+                    onPressed: () async {
+                      final provider = context.read<UsahaProvider>();
+                      final success = await provider.toggleHasPos(usaha.id);
+                      if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Status kasir untuk ${usaha.nama} diubah.')),
+                        SnackBar(
+                          content: Text(
+                            success
+                                ? 'Status kasir untuk ${usaha.nama} berhasil diubah.'
+                                : (provider.lastError ?? 'Gagal mengubah status kasir.'),
+                          ),
+                        ),
                       );
                     },
                   ),
@@ -416,7 +424,20 @@ class UsahaScreen extends StatelessWidget {
                       usaha.hasPos ? Icons.point_of_sale_rounded : Icons.money_off_csred_rounded,
                       color: usaha.hasPos ? AppTheme.primaryBlue : AppTheme.textMuted,
                     ),
-                    onPressed: () => context.read<UsahaProvider>().toggleHasPos(usaha.id),
+                    onPressed: () async {
+                      final provider = context.read<UsahaProvider>();
+                      final success = await provider.toggleHasPos(usaha.id);
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            success
+                                ? 'Status kasir untuk ${usaha.nama} berhasil diubah.'
+                                : (provider.lastError ?? 'Gagal mengubah status kasir.'),
+                          ),
+                        ),
+                      );
+                    },
                   ),
                   IconButton(
                     tooltip: 'Hapus Unit Usaha',
@@ -659,11 +680,19 @@ class UsahaScreen extends StatelessWidget {
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-            onPressed: () {
-              Provider.of<UsahaProvider>(context, listen: false).hapusUsaha(usaha.id);
-              Navigator.pop(ctx);
+            onPressed: () async {
+              final provider = context.read<UsahaProvider>();
+              final success = await provider.hapusUsaha(usaha.id);
+              if (!ctx.mounted) return;
+              if (success) Navigator.pop(ctx);
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Unit usaha "${usaha.nama}" berhasil dihapus.')),
+                SnackBar(
+                  content: Text(
+                    success
+                        ? 'Unit usaha "${usaha.nama}" berhasil dihapus.'
+                        : (provider.lastError ?? 'Gagal menghapus unit usaha.'),
+                  ),
+                ),
               );
             },
             child: const Text('Ya, Hapus Usaha'),
@@ -741,24 +770,33 @@ class UsahaScreen extends StatelessWidget {
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
             ElevatedButton(
-              onPressed: () {
-                if (namaCtrl.text.isNotEmpty) {
-                  final provider = Provider.of<UsahaProvider>(context, listen: false);
-                  provider.tambahUsaha(
-                    UsahaModel(
-                      id: DateTime.now().millisecondsSinceEpoch,
-                      nama: namaCtrl.text,
-                      jenisUsaha: jenisCtrl.text,
-                      lokasi: lokasiCtrl.text,
-                      kategoriPortofolio: selectedKategori,
-                      pendapatanBulanIni: 0,
-                      pengeluaranBulanIni: 0,
-                      pertumbuhanPersen: 0,
-                      hasPos: usePos,
+              onPressed: () async {
+                if (namaCtrl.text.trim().isEmpty) return;
+                final provider = context.read<UsahaProvider>();
+                final success = await provider.tambahUsaha(
+                  UsahaModel(
+                    id: 0,
+                    nama: namaCtrl.text.trim(),
+                    jenisUsaha: jenisCtrl.text.trim(),
+                    lokasi: lokasiCtrl.text.trim(),
+                    kategoriPortofolio: selectedKategori,
+                    pendapatanBulanIni: 0,
+                    pengeluaranBulanIni: 0,
+                    pertumbuhanPersen: 0,
+                    hasPos: usePos,
+                  ),
+                );
+                if (!ctx.mounted) return;
+                if (success) Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      success
+                          ? 'Unit usaha berhasil ditambahkan.'
+                          : (provider.lastError ?? 'Gagal menambahkan unit usaha.'),
                     ),
-                  );
-                  Navigator.pop(ctx);
-                }
+                  ),
+                );
               },
               child: const Text('Simpan'),
             ),

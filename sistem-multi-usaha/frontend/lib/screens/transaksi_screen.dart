@@ -3,6 +3,8 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../models/transaksi.dart';
 import '../providers/transaksi_provider.dart';
+import '../providers/auth_provider.dart';
+import '../providers/usaha_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
 import '../widgets/app_sidebar.dart';
@@ -289,23 +291,39 @@ class _TransaksiScreenState extends State<TransaksiScreen> {
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
             ElevatedButton(
-              onPressed: () {
+              onPressed: () async {
                 final nominal = double.tryParse(jumlahCtrl.text) ?? 0;
-                if (nominal > 0) {
-                  Provider.of<TransaksiProvider>(context, listen: false).tambahTransaksi(
-                    TransaksiModel(
-                      id: DateTime.now().millisecondsSinceEpoch,
-                      unitId: 1,
-                      namaUnit: 'Kedai Kopi Bahagia',
-                      tanggal: DateTime.now(),
-                      jenis: jenis,
-                      kategori: kategoriCtrl.text.isEmpty ? 'Umum' : kategoriCtrl.text,
-                      jumlah: nominal,
-                      keterangan: '',
+                final selectedUnitId = context.read<AuthProvider>().selectedUnitId;
+                final units = context.read<UsahaProvider>().daftarUsaha;
+                final unitId = selectedUnitId ??
+                    (units.isEmpty ? null : units.first.id);
+                final kategori = kategoriCtrl.text.trim();
+                if (nominal <= 0 || kategori.isEmpty || unitId == null) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Pilih unit dan isi kategori serta nominal yang valid.'),
                     ),
                   );
-                  Navigator.pop(ctx);
+                  return;
                 }
+                final provider = context.read<TransaksiProvider>();
+                final success = await provider.catatTransaksiManual(
+                  unitId: unitId,
+                  jenis: jenis,
+                  kategori: kategori,
+                  jumlah: nominal,
+                );
+                if (!ctx.mounted) return;
+                if (success) Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      success
+                          ? 'Transaksi berhasil disimpan.'
+                          : (provider.lastError ?? 'Gagal menyimpan transaksi.'),
+                    ),
+                  ),
+                );
               },
               child: const Text('Simpan'),
             ),

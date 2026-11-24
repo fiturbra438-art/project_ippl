@@ -24,14 +24,18 @@ impl AppState {
         let _ = sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_expires_at TIMESTAMP")
             .execute(&pool)
             .await;
-        let _ = sqlx::query("ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_attempts INT NOT NULL DEFAULT 0")
-            .execute(&pool)
-            .await;
+        let _ = sqlx::query(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS otp_attempts INT NOT NULL DEFAULT 0",
+        )
+        .execute(&pool)
+        .await;
 
         // 1c. Migrasi skema kasir fleksibel (Rental, Jasa, Custom Note & Duration) pada tabel transactions & transaction_items
-        let _ = sqlx::query("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS customer_name VARCHAR(150)")
-            .execute(&pool)
-            .await;
+        let _ = sqlx::query(
+            "ALTER TABLE transactions ADD COLUMN IF NOT EXISTS customer_name VARCHAR(150)",
+        )
+        .execute(&pool)
+        .await;
         let _ = sqlx::query("ALTER TABLE transactions ADD COLUMN IF NOT EXISTS notes TEXT")
             .execute(&pool)
             .await;
@@ -42,15 +46,19 @@ impl AppState {
         let _ = sqlx::query("ALTER TABLE transaction_items ALTER COLUMN product_id DROP NOT NULL")
             .execute(&pool)
             .await;
-        let _ = sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS item_name VARCHAR(150)")
-            .execute(&pool)
-            .await;
+        let _ = sqlx::query(
+            "ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS item_name VARCHAR(150)",
+        )
+        .execute(&pool)
+        .await;
         let _ = sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS item_type VARCHAR(30) DEFAULT 'barang'")
             .execute(&pool)
             .await;
-        let _ = sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS rental_duration INT DEFAULT 1")
-            .execute(&pool)
-            .await;
+        let _ = sqlx::query(
+            "ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS rental_duration INT DEFAULT 1",
+        )
+        .execute(&pool)
+        .await;
         let _ = sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS duration_unit VARCHAR(20) DEFAULT 'jam'")
             .execute(&pool)
             .await;
@@ -83,7 +91,7 @@ impl AppState {
                 penalty_fee NUMERIC(14,2) DEFAULT 0,
                 notes TEXT,
                 created_at TIMESTAMP NOT NULL DEFAULT now()
-            )"
+            )",
         )
         .execute(&pool)
         .await;
@@ -94,17 +102,69 @@ impl AppState {
         let _ = sqlx::query("CREATE INDEX IF NOT EXISTS ix_rental_service_product_active ON rental_service_orders(product_id, status)")
             .execute(&pool)
             .await;
-        let _ = sqlx::query("ALTER TABLE rental_service_orders ADD COLUMN IF NOT EXISTS qty INT NOT NULL DEFAULT 1")
-            .execute(&pool)
-            .await;
+        let _ = sqlx::query(
+            "ALTER TABLE rental_service_orders ADD COLUMN IF NOT EXISTS qty INT NOT NULL DEFAULT 1",
+        )
+        .execute(&pool)
+        .await;
 
         // 1e. Status & waktu terima untuk mutasi transfer stok
         let _ = sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'diterima'")
             .execute(&pool)
             .await;
-        let _ = sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS waktu_terima TIMESTAMP")
+        let _ = sqlx::query(
+            "ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS waktu_terima TIMESTAMP",
+        )
+        .execute(&pool)
+        .await;
+        let _ = sqlx::query(
+            "ALTER TABLE inventories ADD COLUMN IF NOT EXISTS reserved_qty INT NOT NULL DEFAULT 0",
+        )
+        .execute(&pool)
+        .await;
+        let _ = sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS diminta_oleh INT REFERENCES users(id) ON DELETE SET NULL")
             .execute(&pool)
             .await;
+        let _ = sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS disetujui_oleh INT REFERENCES users(id) ON DELETE SET NULL")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query(
+            "ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS waktu_persetujuan TIMESTAMP",
+        )
+        .execute(&pool)
+        .await;
+        let _ = sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS dikirim_oleh INT REFERENCES users(id) ON DELETE SET NULL")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query(
+            "ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS waktu_pengiriman TIMESTAMP",
+        )
+        .execute(&pool)
+        .await;
+        let _ = sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS diterima_oleh INT REFERENCES users(id) ON DELETE SET NULL")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS ditolak_oleh INT REFERENCES users(id) ON DELETE SET NULL")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query(
+            "ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS waktu_penolakan TIMESTAMP",
+        )
+        .execute(&pool)
+        .await;
+        let _ = sqlx::query(
+            "ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS alasan_penolakan TEXT",
+        )
+        .execute(&pool)
+        .await;
+        let _ = sqlx::query("ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS dibatalkan_oleh INT REFERENCES users(id) ON DELETE SET NULL")
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query(
+            "ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS waktu_pembatalan TIMESTAMP",
+        )
+        .execute(&pool)
+        .await;
 
         // 1f. Kolom periode_omzet dan sinkronisasi casing kategori_portofolio di business_units
         let _ = sqlx::query("ALTER TABLE business_units ADD COLUMN IF NOT EXISTS periode_omzet VARCHAR(7) NOT NULL DEFAULT to_char(CURRENT_DATE, 'YYYY-MM')")
@@ -119,7 +179,7 @@ impl AppState {
                 WHEN 'question mark' THEN 'Question Mark'
                 WHEN 'dog' THEN 'Dog'
                 ELSE COALESCE(kategori_portofolio, 'Star')
-            END"
+            END",
         )
         .execute(&pool)
         .await;
@@ -130,10 +190,59 @@ impl AppState {
              SET pendapatan_bulan_ini = 0,
                  pengeluaran_bulan_ini = 0,
                  periode_omzet = to_char(CURRENT_DATE, 'YYYY-MM')
-             WHERE COALESCE(periode_omzet, '') <> to_char(CURRENT_DATE, 'YYYY-MM')"
+             WHERE COALESCE(periode_omzet, '') <> to_char(CURRENT_DATE, 'YYYY-MM')",
         )
         .execute(&pool)
         .await;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS transaction_refunds (
+                id SERIAL PRIMARY KEY,
+                transaction_id INT NOT NULL REFERENCES transactions(id) ON DELETE RESTRICT,
+                owner_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                unit_id INT NOT NULL REFERENCES business_units(id) ON DELETE CASCADE,
+                jenis VARCHAR(20) NOT NULL CHECK (jenis IN ('refund', 'void')),
+                status VARCHAR(20) NOT NULL DEFAULT 'selesai',
+                alasan TEXT NOT NULL,
+                jumlah NUMERIC(14,2) NOT NULL CHECK (jumlah > 0),
+                aktor_id INT REFERENCES users(id) ON DELETE SET NULL,
+                aktor VARCHAR(150) NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT now()
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("Gagal memigrasikan tabel transaction_refunds");
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS ix_transaction_refunds_transaction
+             ON transaction_refunds(transaction_id, created_at)",
+        )
+        .execute(&pool)
+        .await
+        .expect("Gagal membuat index transaction_refunds");
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS transaction_refund_items (
+                id SERIAL PRIMARY KEY,
+                refund_id INT NOT NULL REFERENCES transaction_refunds(id) ON DELETE RESTRICT,
+                transaction_item_id INT NOT NULL REFERENCES transaction_items(id) ON DELETE RESTRICT,
+                product_id INT REFERENCES products(id) ON DELETE SET NULL,
+                item_name VARCHAR(150) NOT NULL,
+                item_type VARCHAR(30) NOT NULL,
+                qty INT NOT NULL CHECK (qty > 0),
+                jumlah NUMERIC(14,2) NOT NULL CHECK (jumlah > 0),
+                UNIQUE (refund_id, transaction_item_id)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("Gagal memigrasikan tabel transaction_refund_items");
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS ix_transaction_refund_items_source
+             ON transaction_refund_items(transaction_item_id)",
+        )
+        .execute(&pool)
+        .await
+        .expect("Gagal membuat index transaction_refund_items");
 
         // Perbarui trigger fungsi omzet agar otomatis me-reset di pergantian bulan
         let _ = sqlx::query(

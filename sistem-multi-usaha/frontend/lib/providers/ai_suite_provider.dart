@@ -283,30 +283,6 @@ class AiSuiteProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setujuiRealokasiStok(int id) {
-    final idx = _daftarRealokasi.indexWhere((r) => r.id == id);
-    if (idx != -1) {
-      _daftarRealokasi[idx].status = StatusRekomendasi.disetujui;
-      notifyListeners();
-    }
-  }
-
-  void tolakRealokasiStok(int id) {
-    final idx = _daftarRealokasi.indexWhere((r) => r.id == id);
-    if (idx != -1) {
-      _daftarRealokasi[idx].status = StatusRekomendasi.ditolak;
-      notifyListeners();
-    }
-  }
-
-  void selesaikanAnomali(int id) {
-    final idx = _daftarAnomali.indexWhere((a) => a.id == id);
-    if (idx != -1) {
-      _daftarAnomali[idx].isDiselesaikan = true;
-      notifyListeners();
-    }
-  }
-
   String _periodeLabel(dynamic value) {
     final parsed = DateTime.tryParse(value?.toString() ?? '');
     if (parsed == null) return value?.toString() ?? '-';

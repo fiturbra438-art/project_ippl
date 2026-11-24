@@ -53,11 +53,15 @@ pub async fn chat_ai(
         return ai_unavailable("AI service belum dikonfigurasi.");
     }
     if claims.role != "owner" {
-        return (StatusCode::FORBIDDEN, Json(ApiResponse::<ChatAiResponse> {
-            status: "error".to_string(),
-            message: "Asisten AI konsolidasi hanya tersedia untuk Owner/Auditor.".to_string(),
-            data: None,
-        })).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<ChatAiResponse> {
+                status: "error".to_string(),
+                message: "Asisten AI konsolidasi hanya tersedia untuk Owner/Auditor.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
     }
     let owner_id = claims.owner_id;
 
@@ -87,7 +91,8 @@ pub async fn chat_ai(
                 message: "Kuota pertanyaan AI Anda telah habis.".to_string(),
                 data: None,
             }),
-        ).into_response();
+        )
+            .into_response();
     };
     let nama_bisnis = nama_opt.unwrap_or_else(|| "Grup Bisnis".to_string());
 
@@ -246,17 +251,18 @@ pub async fn get_forecast(
 ) -> impl IntoResponse {
     let owner_id = claims.owner_id;
 
-    if let Err(err) = ensure_unit_access(&state, &claims, unit_id).await { return err; }
+    if let Err(err) = ensure_unit_access(&state, &claims, unit_id).await {
+        return err;
+    }
 
     // Verifikasi unit_id milik bisnis pengguna
-    let nama_unit: Option<String> = sqlx::query_scalar(
-        "SELECT nama FROM business_units WHERE id = $1 AND owner_id = $2",
-    )
-    .bind(unit_id as i32)
-    .bind(owner_id as i32)
-    .fetch_optional(&state.db)
-    .await
-    .unwrap_or(None);
+    let nama_unit: Option<String> =
+        sqlx::query_scalar("SELECT nama FROM business_units WHERE id = $1 AND owner_id = $2")
+            .bind(unit_id as i32)
+            .bind(owner_id as i32)
+            .fetch_optional(&state.db)
+            .await
+            .unwrap_or(None);
 
     let Some(nama_unit) = nama_unit else {
         return (
@@ -325,16 +331,18 @@ pub async fn get_forecast(
 }
 
 // 3. DETEKSI ANOMALI BISNIS (Membaca Langsung dari View PostgreSQL)
-pub async fn get_anomali(
-    State(state): State<Arc<AppState>>,
-    claims: Claims,
-) -> impl IntoResponse {
+pub async fn get_anomali(State(state): State<Arc<AppState>>, claims: Claims) -> impl IntoResponse {
     if claims.role != "owner" {
-        return (StatusCode::FORBIDDEN, Json(ApiResponse::<Vec<AnomaliItem>> {
-            status: "error".to_string(),
-            message: "Deteksi anomali konsolidasi hanya tersedia untuk Owner/Auditor.".to_string(),
-            data: None,
-        })).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<Vec<AnomaliItem>> {
+                status: "error".to_string(),
+                message: "Deteksi anomali konsolidasi hanya tersedia untuk Owner/Auditor."
+                    .to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
     }
     let owner_id = claims.owner_id;
 

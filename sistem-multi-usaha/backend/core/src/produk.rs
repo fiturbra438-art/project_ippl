@@ -210,7 +210,15 @@ pub async fn create_produk(
     let owner_id = claims.owner_id;
     let aktor_role = claims.role.as_str();
     if !["owner", "manager"].contains(&aktor_role) {
-        return (StatusCode::FORBIDDEN, Json(ApiResponse::<ProdukModel> { status: "error".to_string(), message: "Role tidak boleh mengelola produk.".to_string(), data: None })).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<ProdukModel> {
+                status: "error".to_string(),
+                message: "Role tidak boleh mengelola produk.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
     }
     if let Err(response) = ensure_unit_access(&state, &claims, payload.unit_id).await {
         return response.into_response();
@@ -277,7 +285,17 @@ pub async fn create_produk(
 
     let mut tx = match state.db.begin().await {
         Ok(tx) => tx,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<ProdukModel> { status: "error".to_string(), message: format!("Gagal memulai transaksi: {}", e), data: None })).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::<ProdukModel> {
+                    status: "error".to_string(),
+                    message: format!("Gagal memulai transaksi: {}", e),
+                    data: None,
+                }),
+            )
+                .into_response()
+        }
     };
     let prod_row: Result<(i32,), sqlx::Error> = sqlx::query_as(
         "INSERT INTO products (owner_id, sku, nama, kategori, harga_beli, harga_jual, satuan, created_at)
@@ -318,10 +336,26 @@ pub async fn create_produk(
     .execute(&mut *tx)
     .await;
     if let Err(e) = inventory_result {
-        return (StatusCode::BAD_REQUEST, Json(ApiResponse::<ProdukModel> { status: "error".to_string(), message: format!("Gagal menyimpan inventaris: {}", e), data: None })).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<ProdukModel> {
+                status: "error".to_string(),
+                message: format!("Gagal menyimpan inventaris: {}", e),
+                data: None,
+            }),
+        )
+            .into_response();
     }
     if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(ApiResponse::<ProdukModel> { status: "error".to_string(), message: format!("Gagal menyelesaikan transaksi: {}", e), data: None })).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::<ProdukModel> {
+                status: "error".to_string(),
+                message: format!("Gagal menyelesaikan transaksi: {}", e),
+                data: None,
+            }),
+        )
+            .into_response();
     }
 
     let new_produk = ProdukModel {
@@ -357,7 +391,15 @@ pub async fn update_produk(
 ) -> impl IntoResponse {
     let aktor_role = claims.role.as_str();
     if !["owner", "manager"].contains(&aktor_role) {
-        return (StatusCode::FORBIDDEN, Json(ApiResponse::<ProdukModel> { status: "error".to_string(), message: "Role tidak boleh mengelola produk.".to_string(), data: None })).into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Json(ApiResponse::<ProdukModel> {
+                status: "error".to_string(),
+                message: "Role tidak boleh mengelola produk.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
     }
 
     let product_valid: bool =
@@ -465,19 +507,25 @@ pub async fn adjust_stok(
         )
             .into_response();
     }
+    if let Err(response) = ensure_unit_access(&state, &claims, payload.unit_id).await {
+        return response.into_response();
+    }
     let res = sqlx::query(
-        "UPDATE inventories SET qty = GREATEST(0, qty + $1) WHERE product_id = $2 AND unit_id IN (SELECT u.id FROM business_units u WHERE u.owner_id = $3 AND ($4 = 'owner' OR EXISTS (SELECT 1 FROM user_units uu WHERE uu.user_id = $5 AND uu.unit_id = u.id)))"
+        "UPDATE inventories i SET qty = i.qty + $1
+         FROM products p
+         WHERE i.product_id = p.id AND p.id = $2 AND p.owner_id = $3
+           AND i.unit_id = $4 AND i.qty + $1 >= i.reserved_qty
+           AND EXISTS (SELECT 1 FROM business_units u WHERE u.id = i.unit_id AND u.owner_id = $3)",
     )
     .bind(payload.penambahan)
     .bind(id as i32)
     .bind(claims.owner_id as i32)
-    .bind(&claims.role)
-    .bind(claims.user_id as i32)
+    .bind(payload.unit_id as i32)
     .execute(&state.db)
     .await;
 
     match res {
-        Ok(_) => (
+        Ok(result) if result.rows_affected() == 1 => (
             StatusCode::OK,
             Json(ApiResponse::<()> {
                 status: "success".to_string(),
@@ -485,6 +533,16 @@ pub async fn adjust_stok(
                     "Stok produk #{} berhasil disesuaikan ({}) di database.",
                     id, payload.penambahan
                 ),
+                data: None,
+            }),
+        )
+            .into_response(),
+        Ok(_) => (
+            StatusCode::CONFLICT,
+            Json(ApiResponse::<()> {
+                status: "error".to_string(),
+                message: "Stok tidak ditemukan atau pengurangan akan melanggar reservasi."
+                    .to_string(),
                 data: None,
             }),
         )

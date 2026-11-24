@@ -3,6 +3,11 @@ class LaporanSummary {
   final double totalPengeluaran;
   final double labaOperasional;
   final double marginLabaPersen;
+  final double omzetKotor;
+  final double diskon;
+  final double refund;
+  final double omzetBersih;
+  final double hpp;
   final List<KategoriPengeluaran> rincianPengeluaran;
   final List<PerformaUnitLaporan> performaUnit;
 
@@ -11,6 +16,11 @@ class LaporanSummary {
     required this.totalPengeluaran,
     required this.labaOperasional,
     required this.marginLabaPersen,
+    required this.omzetKotor,
+    required this.diskon,
+    required this.refund,
+    required this.omzetBersih,
+    required this.hpp,
     required this.rincianPengeluaran,
     required this.performaUnit,
   });

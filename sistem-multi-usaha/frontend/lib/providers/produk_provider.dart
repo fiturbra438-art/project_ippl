@@ -2,7 +2,17 @@ import 'package:flutter/material.dart';
 import '../models/produk.dart';
 import '../services/api_service.dart';
 
+typedef ProdukApiPatch = Future<Map<String, dynamic>?> Function(
+  String endpoint,
+  Map<String, dynamic>? body,
+);
+
 class ProdukProvider extends ChangeNotifier {
+  ProdukProvider({ProdukApiPatch? patch})
+      : _patch = patch ?? ((endpoint, body) => ApiService.patch(endpoint, body));
+
+  final ProdukApiPatch _patch;
+
   // Data produk yang disinkronkan langsung dari PostgreSQL backend
   List<ProdukModel> _daftarProduk = [];
   bool _isLoading = false;
@@ -66,22 +76,42 @@ class ProdukProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  void updateStok(int produkId, int penambahan) {
+  Future<bool> updateStok(int produkId, int penambahan) async {
+    _lastError = null;
     final idx = _daftarProduk.indexWhere((p) => p.id == produkId);
-    if (idx != -1) {
-      final p = _daftarProduk[idx];
-      _daftarProduk[idx] = ProdukModel(
-        id: p.id,
-        unitId: p.unitId,
-        nama: p.nama,
-        sku: p.sku,
-        hargaBeli: p.hargaBeli,
-        hargaJual: p.hargaJual,
-        stok: (p.stok + penambahan).clamp(0, 99999),
-        minStok: p.minStok,
-      );
-      notifyListeners();
+    if (idx == -1 || penambahan == 0) {
+      _lastError = 'Produk atau perubahan stok tidak valid.';
+      return false;
     }
+
+    try {
+      final product = _daftarProduk[idx];
+      final res = await _patch('/produk/$produkId/stok', {
+        'unit_id': product.unitId,
+        'penambahan': penambahan,
+      });
+      if (res != null && res['status'] == 'success') {
+        _daftarProduk[idx] = ProdukModel(
+          id: product.id,
+          unitId: product.unitId,
+          nama: product.nama,
+          sku: product.sku,
+          hargaBeli: product.hargaBeli,
+          hargaJual: product.hargaJual,
+          stok: product.stok + penambahan,
+          minStok: product.minStok,
+        );
+        notifyListeners();
+        return true;
+      }
+      _lastError = res?['message'] as String? ?? 'Gagal menyesuaikan stok.';
+    } catch (e) {
+      debugPrint('ProdukProvider.updateStok error: $e');
+      _lastError = 'Gagal menyesuaikan stok: $e';
+    }
+
+    notifyListeners();
+    return false;
   }
 
   void tambahProduk(ProdukModel produk) {

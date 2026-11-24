@@ -3,14 +3,13 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../models/produk.dart';
 import '../providers/produk_provider.dart';
+import '../providers/usaha_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/responsive_layout.dart';
 import '../widgets/app_sidebar.dart';
 import 'dashboard_screen.dart';
-import 'usaha_screen.dart';
 import 'transaksi_screen.dart';
 import 'portofolio_screen.dart';
-import 'forecast_screen.dart';
 
 class ProdukScreen extends StatefulWidget {
   const ProdukScreen({super.key});
@@ -93,9 +92,9 @@ class _ProdukScreenState extends State<ProdukScreen> {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Column(
+        const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
+          children: [
             Text('Manajemen Produk & Inventaris', style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppTheme.textPrimary)),
             SizedBox(height: 4),
             Text('Kontrol stok, batas minimum suplai, dan margin per unit usaha.', style: TextStyle(fontSize: 14, color: AppTheme.textSecondary)),
@@ -112,6 +111,7 @@ class _ProdukScreenState extends State<ProdukScreen> {
 
   Widget _buildFilterBar(BuildContext context) {
     final provider = context.watch<ProdukProvider>();
+    final units = context.watch<UsahaProvider>().daftarUsaha;
 
     return Row(
       children: [
@@ -136,11 +136,12 @@ class _ProdukScreenState extends State<ProdukScreen> {
           child: DropdownButtonHideUnderline(
             child: DropdownButton<int>(
               value: provider.selectedUnitFilter,
-              items: const [
-                DropdownMenuItem(value: 0, child: Text('Semua Unit Usaha')),
-                DropdownMenuItem(value: 1, child: Text('Kedai Kopi Bahagia')),
-                DropdownMenuItem(value: 2, child: Text('Laundry Bersih Kilat')),
-                DropdownMenuItem(value: 3, child: Text('Toko Elektronik Digital')),
+              items: [
+                const DropdownMenuItem(value: 0, child: Text('Semua Unit Usaha')),
+                ...units.map((unit) => DropdownMenuItem(
+                      value: unit.id,
+                      child: Text(unit.nama, overflow: TextOverflow.ellipsis),
+                    )),
               ],
               onChanged: (val) {
                 if (val != null) provider.setUnitFilter(val);
@@ -285,11 +286,11 @@ class _ProdukScreenState extends State<ProdukScreen> {
                     children: [
                       IconButton(
                         icon: const Icon(Icons.remove_circle_outline_rounded, size: 20, color: AppTheme.textSecondary),
-                        onPressed: () => context.read<ProdukProvider>().updateStok(p.id, -1),
+                        onPressed: () => _adjustStock(context, p.id, -1),
                       ),
                       IconButton(
                         icon: const Icon(Icons.add_circle_outline_rounded, size: 20, color: AppTheme.primaryBlue),
-                        onPressed: () => context.read<ProdukProvider>().updateStok(p.id, 1),
+                        onPressed: () => _adjustStock(context, p.id, 1),
                       ),
                     ],
                   ),
@@ -351,12 +352,12 @@ class _ProdukScreenState extends State<ProdukScreen> {
                 children: [
                   IconButton(
                     icon: const Icon(Icons.remove_circle_outline_rounded, color: AppTheme.textSecondary),
-                    onPressed: () => context.read<ProdukProvider>().updateStok(p.id, -1),
+                    onPressed: () => _adjustStock(context, p.id, -1),
                   ),
                   Text('${p.stok}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                   IconButton(
                     icon: const Icon(Icons.add_circle_outline_rounded, color: AppTheme.primaryBlue),
-                    onPressed: () => context.read<ProdukProvider>().updateStok(p.id, 1),
+                    onPressed: () => _adjustStock(context, p.id, 1),
                   ),
                 ],
               ),
@@ -373,6 +374,13 @@ class _ProdukScreenState extends State<ProdukScreen> {
     final beliCtrl = TextEditingController();
     final jualCtrl = TextEditingController();
     final stokCtrl = TextEditingController();
+    final units = context.read<UsahaProvider>().daftarUsaha;
+    if (units.isEmpty) return;
+    final selectedFilter = context.read<ProdukProvider>().selectedUnitFilter;
+    final unit = units.firstWhere(
+      (item) => item.id == selectedFilter,
+      orElse: () => units.first,
+    );
 
     showDialog(
       context: context,
@@ -397,31 +405,69 @@ class _ProdukScreenState extends State<ProdukScreen> {
               ),
               const SizedBox(height: 10),
               TextField(controller: stokCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Jumlah Stok Awal', border: OutlineInputBorder())),
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text('Unit usaha: ${unit.nama}'),
+              ),
             ],
           ),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Batal')),
           ElevatedButton(
-            onPressed: () {
-              if (namaCtrl.text.isNotEmpty) {
-                Provider.of<ProdukProvider>(context, listen: false).tambahProduk(
-                  ProdukModel(
-                    id: DateTime.now().millisecondsSinceEpoch,
-                    unitId: 1,
-                    nama: namaCtrl.text,
-                    sku: skuCtrl.text.isEmpty ? 'SKU-001' : skuCtrl.text,
-                    hargaBeli: double.tryParse(beliCtrl.text) ?? 0,
-                    hargaJual: double.tryParse(jualCtrl.text) ?? 0,
-                    stok: int.tryParse(stokCtrl.text) ?? 0,
+            onPressed: () async {
+              if (namaCtrl.text.trim().isEmpty) return;
+              final product = ProdukModel(
+                id: 0,
+                unitId: unit.id,
+                nama: namaCtrl.text.trim(),
+                sku: skuCtrl.text.trim(),
+                hargaBeli: double.tryParse(beliCtrl.text) ?? 0,
+                hargaJual: double.tryParse(jualCtrl.text) ?? 0,
+                stok: int.tryParse(stokCtrl.text) ?? 0,
+              );
+              final success = await context
+                  .read<ProdukProvider>()
+                  .simpanProdukKeBackend(product);
+              if (!ctx.mounted) return;
+              if (success) Navigator.pop(ctx);
+              final provider = context.read<ProdukProvider>();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    success
+                        ? 'Produk berhasil disimpan.'
+                        : (provider.lastError ?? 'Gagal menyimpan produk.'),
                   ),
-                );
-                Navigator.pop(ctx);
-              }
+                ),
+              );
             },
             child: const Text('Simpan'),
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _adjustStock(
+    BuildContext context,
+    int productId,
+    int adjustment,
+  ) async {
+    final success = await context.read<ProdukProvider>().updateStok(
+          productId,
+          adjustment,
+        );
+    if (!context.mounted) return;
+    final provider = context.read<ProdukProvider>();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success
+              ? 'Stok berhasil diperbarui.'
+              : (provider.lastError ?? 'Gagal memperbarui stok.'),
+        ),
       ),
     );
   }

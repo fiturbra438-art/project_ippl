@@ -10,7 +10,11 @@ pub fn generate_dynamic_otp() -> String {
     code.to_string()
 }
 
-pub async fn send_otp_email(recipient_email: &str, recipient_name: &str, otp_code: &str) -> Result<(), String> {
+pub async fn send_otp_email(
+    recipient_email: &str,
+    recipient_name: &str,
+    otp_code: &str,
+) -> Result<(), String> {
     let email_body = format!(
         r#"Halo {},
 
@@ -30,7 +34,8 @@ Tim Keamanan Multi-Usaha
     // 1. Cek apakah ada RESEND_API_KEY
     let resend_api_key = std::env::var("RESEND_API_KEY").unwrap_or_default();
     if !resend_api_key.trim().is_empty() {
-        let from_email = std::env::var("RESEND_FROM").unwrap_or_else(|_| "MultiUsaha <onboarding@resend.dev>".to_string());
+        let from_email = std::env::var("RESEND_FROM")
+            .unwrap_or_else(|_| "MultiUsaha <onboarding@resend.dev>".to_string());
         let client = reqwest::Client::new();
         let payload = json!({
             "from": from_email,
@@ -48,7 +53,10 @@ Tim Keamanan Multi-Usaha
             .map_err(|e| format!("Request Resend gagal: {}", e))?;
 
         if res.status().is_success() {
-            tracing::info!("✉️ [Resend API] Email OTP berhasil dikirim ke {}", recipient_email);
+            tracing::info!(
+                "✉️ [Resend API] Email OTP berhasil dikirim ke {}",
+                recipient_email
+            );
             return Ok(());
         } else {
             let err_text = res.text().await.unwrap_or_default();
@@ -65,11 +73,16 @@ Tim Keamanan Multi-Usaha
         .unwrap_or(587);
     let smtp_user = std::env::var("SMTP_USER").unwrap_or_default();
     let smtp_pass = std::env::var("SMTP_PASSWORD").unwrap_or_default();
-    let smtp_from = std::env::var("SMTP_FROM").unwrap_or_else(|_| "MultiUsaha <no-reply@multi-usaha.com>".to_string());
+    let smtp_from = std::env::var("SMTP_FROM")
+        .unwrap_or_else(|_| "MultiUsaha <no-reply@multi-usaha.com>".to_string());
 
     if !smtp_host.trim().is_empty() && !smtp_user.trim().is_empty() {
         let email = Message::builder()
-            .from(smtp_from.parse().map_err(|e| format!("Header FROM tidak valid: {}", e))?)
+            .from(
+                smtp_from
+                    .parse()
+                    .map_err(|e| format!("Header FROM tidak valid: {}", e))?,
+            )
             .to(format!("{} <{}>", recipient_name, recipient_email)
                 .parse()
                 .map_err(|e| format!("Header TO tidak valid: {}", e))?)
@@ -92,12 +105,23 @@ Tim Keamanan Multi-Usaha
                 .build()
         };
 
-        mailer.send(email).await.map_err(|e| format!("Gagal mengirim email OTP: {}", e))?;
-        tracing::info!("✉️ [SMTP] Email OTP berhasil terkirim ke {}", recipient_email);
+        mailer
+            .send(email)
+            .await
+            .map_err(|e| format!("Gagal mengirim email OTP: {}", e))?;
+        tracing::info!(
+            "✉️ [SMTP] Email OTP berhasil terkirim ke {}",
+            recipient_email
+        );
         return Ok(());
     }
 
     // 3. Fallback Log Terminal jika tidak ada API Key atau SMTP
-    tracing::warn!("⚠️ Belum ada RESEND_API_KEY atau SMTP. Kode OTP untuk {} ({}) adalah: {}", recipient_name, recipient_email, otp_code);
+    tracing::warn!(
+        "⚠️ Belum ada RESEND_API_KEY atau SMTP. Kode OTP untuk {} ({}) adalah: {}",
+        recipient_name,
+        recipient_email,
+        otp_code
+    );
     Ok(())
 }
