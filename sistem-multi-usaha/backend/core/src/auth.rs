@@ -248,7 +248,7 @@ pub async fn register_owner(
 
     let new_owner_row: Result<(i32,), sqlx::Error> = sqlx::query_as(
         "INSERT INTO users (nama, email, password_hash, role, aktif, nama_perusahaan, tier, kuota_unit_usaha, sisa_kuota_ai, is_2fa_active, otp_code, otp_expires_at)
-         VALUES ($1, LOWER($2), $3, 'owner', true, $4, 'free', 2, 20, true, $5, $6)
+         VALUES ($1, LOWER($2), $3, 'owner', false, $4, 'free', 2, 20, true, $5, $6)
          RETURNING id"
     )
     .bind(&payload.nama)
@@ -311,7 +311,7 @@ pub async fn login_owner(
     let owner_row = sqlx::query_as::<_, (i32, String, String, String, Option<String>, Option<bool>, Option<i32>, Option<i32>, Option<String>)>(
         "SELECT id, nama, email, password_hash, tier, is_2fa_active, kuota_unit_usaha, sisa_kuota_ai, nama_perusahaan
          FROM users
-         WHERE LOWER(email) = LOWER($1) AND role = 'owner'"
+         WHERE LOWER(email) = LOWER($1) AND role = 'owner' AND aktif = true"
     )
     .bind(&payload.email)
     .fetch_optional(&state.db)
@@ -471,7 +471,7 @@ pub async fn verify_owner_2fa(
     >(
         "SELECT id, nama, email, password_hash, tier, secret_2fa, kuota_unit_usaha, sisa_kuota_ai, nama_perusahaan
          FROM users
-         WHERE LOWER(email) = LOWER($1) AND role = 'owner'",
+         WHERE LOWER(email) = LOWER($1) AND role = 'owner' AND aktif = true",
     )
     .bind(&payload.email)
     .fetch_optional(&state.db)
@@ -602,7 +602,7 @@ pub async fn verify_owner_2fa(
 
     // Hanguskan OTP setelah berhasil dipakai (mencegah replay attack)
     let _ = sqlx::query(
-        "UPDATE users SET otp_code = NULL, otp_expires_at = NULL, otp_attempts = 0 WHERE id = $1",
+        "UPDATE users SET otp_code = NULL, otp_expires_at = NULL, otp_attempts = 0, aktif = true WHERE id = $1",
     )
     .bind(owner.0)
     .execute(&state.db)

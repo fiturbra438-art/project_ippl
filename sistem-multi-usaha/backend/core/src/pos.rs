@@ -32,23 +32,27 @@ pub(crate) fn bulatkan_dua(nilai: f64) -> f64 {
 }
 
 pub(crate) fn hitung_nilai_refund(
-    subtotal: f64,
+    subtotal: rust_decimal::Decimal,
     qty_awal: i32,
     qty_refund: i32,
-    faktor_diskon: f64,
-) -> f64 {
-    if qty_awal <= 0 || qty_refund <= 0 || subtotal <= 0.0 {
-        return 0.0;
+    faktor_diskon: rust_decimal::Decimal,
+) -> rust_decimal::Decimal {
+    if qty_awal <= 0 || qty_refund <= 0 || subtotal <= rust_decimal::Decimal::ZERO {
+        return rust_decimal::Decimal::ZERO;
     }
-    let dasar = subtotal * (qty_refund as f64) / (qty_awal as f64);
-    bulatkan_dua((dasar * faktor_diskon).max(0.0))
+    let dasar =
+        subtotal * rust_decimal::Decimal::from(qty_refund) / rust_decimal::Decimal::from(qty_awal);
+    let nilai = (dasar * faktor_diskon)
+        .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero);
+    nilai.max(rust_decimal::Decimal::ZERO)
 }
 
-pub(crate) fn refund_masih_boleh(total: f64, sudah: f64, baru: f64) -> bool {
-    if baru <= 0.0 {
-        return false;
-    }
-    (sudah + baru) <= total + 0.01
+pub(crate) fn refund_masih_boleh(
+    total: rust_decimal::Decimal,
+    sudah: rust_decimal::Decimal,
+    baru: rust_decimal::Decimal,
+) -> bool {
+    baru > rust_decimal::Decimal::ZERO && sudah + baru <= total
 }
 
 // 1. STATUS SHIFT KASIR AKTIF (Membaca langsung dari tabel PostgreSQL cashier_shifts)
@@ -1072,12 +1076,13 @@ pub async fn get_transaksi_detail(
             Option<i32>,
             String,
             String,
+            rust_decimal::Decimal,
             i32,
             rust_decimal::Decimal,
         ),
     >(
         "SELECT ri.refund_id, ri.transaction_item_id, ri.product_id, ri.item_name,
-                ri.item_type, ri.qty, ri.jumlah
+                ri.item_type, ri.harga_beli_saat_refund, ri.qty, ri.jumlah
          FROM transaction_refund_items ri
          JOIN transaction_refunds r ON r.id = ri.refund_id
          WHERE r.transaction_id = $1 ORDER BY ri.id ASC",
@@ -1098,8 +1103,8 @@ pub async fn get_transaksi_detail(
                 product_id: row.2.map(|v| v as i64),
                 item_name: row.3,
                 item_type: row.4,
-                qty: row.5,
-                jumlah: row.6.to_f64().unwrap_or_default(),
+                qty: row.6,
+                jumlah: row.7.to_f64().unwrap_or_default(),
             });
     }
 
@@ -1173,6 +1178,18 @@ pub async fn refund_transaksi(
             .into_response();
     }
     let alasan = payload.alasan.trim().to_string();
+    let idempotency_key = payload.idempotency_key.trim().to_string();
+    if idempotency_key.is_empty() || idempotency_key.len() > 80 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::<RefundModel> {
+                status: "error".to_string(),
+                message: "Idempotency key refund wajib diisi dan maksimal 80 karakter.".to_string(),
+                data: None,
+            }),
+        )
+            .into_response();
+    }
     if alasan.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -1231,7 +1248,63 @@ pub async fn refund_transaksi(
                 "Hanya transaksi berstatus selesai yang dapat direfund.".to_string(),
             ));
         }
-        let total = total_dec.to_f64().unwrap_or_default();
+        let existing_refund = sqlx::query_as::<
+            _,
+            (
+                i32,
+                String,
+                String,
+                rust_decimal::Decimal,
+                String,
+                chrono::NaiveDateTime,
+            ),
+        >(
+            "SELECT id, jenis, alasan, jumlah, aktor, created_at
+             FROM transaction_refunds
+             WHERE transaction_id = $1 AND idempotency_key = $2",
+        )
+        .bind(id as i32)
+        .bind(&idempotency_key)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if let Some(existing) = existing_refund {
+            let existing_items = sqlx::query_as::<
+                _,
+                (i32, Option<i32>, String, String, i32, rust_decimal::Decimal),
+            >(
+                "SELECT transaction_item_id, product_id, item_name, item_type, qty, jumlah
+                 FROM transaction_refund_items WHERE refund_id = $1 ORDER BY id ASC",
+            )
+            .bind(existing.0)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            return Ok(RefundModel {
+                id: existing.0 as i64,
+                transaction_id: id,
+                unit_id: unit_id as i64,
+                jenis: existing.1,
+                alasan: existing.2,
+                jumlah: existing.3.to_f64().unwrap_or_default(),
+                aktor: existing.4,
+                created_at: existing.5.format("%Y-%m-%d %H:%M").to_string(),
+                items: existing_items
+                    .into_iter()
+                    .map(|row| RefundItemModel {
+                        transaction_item_id: row.0 as i64,
+                        product_id: row.1.map(|v| v as i64),
+                        item_name: row.2,
+                        item_type: row.3,
+                        qty: row.4,
+                        jumlah: row.5.to_f64().unwrap_or_default(),
+                    })
+                    .collect(),
+            });
+        }
 
         let already_refunded: rust_decimal::Decimal = sqlx::query_scalar(
             "SELECT COALESCE(SUM(jumlah), 0) FROM transaction_refunds WHERE transaction_id = $1",
@@ -1240,8 +1313,8 @@ pub async fn refund_transaksi(
         .fetch_one(&mut *tx)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        let already = already_refunded.to_f64().unwrap_or_default();
-        if already >= total - 0.005 {
+        let already = already_refunded;
+        if already >= total_dec {
             return Err((
                 StatusCode::CONFLICT,
                 "Transaksi sudah direfund penuh.".to_string(),
@@ -1258,12 +1331,13 @@ pub async fn refund_transaksi(
                 i32,
                 rust_decimal::Decimal,
                 rust_decimal::Decimal,
+                rust_decimal::Decimal,
                 i64,
             ),
         >(
             "SELECT ti.id, ti.product_id, COALESCE(ti.item_name, '-'),
                     COALESCE(ti.item_type, 'barang'), ti.qty, ti.harga_satuan, ti.subtotal,
-                    COALESCE((SELECT SUM(ri.qty) FROM transaction_refund_items ri
+                    COALESCE(ti.harga_beli_saat_transaksi, 0), COALESCE((SELECT SUM(ri.qty) FROM transaction_refund_items ri
                               WHERE ri.transaction_item_id = ti.id), 0)::bigint
              FROM transaction_items ti
              WHERE ti.trx_id = $1
@@ -1284,7 +1358,7 @@ pub async fn refund_transaksi(
         let mut request_qty: HashMap<i32, i32> = HashMap::new();
         if payload.void {
             for row in &item_rows {
-                let sisa = row.4 - row.7.max(0) as i32;
+                let sisa = row.4 - row.8.max(0) as i32;
                 if sisa > 0 {
                     request_qty.insert(row.0, sisa);
                 }
@@ -1320,23 +1394,23 @@ pub async fn refund_transaksi(
             ));
         }
 
-        let sum_subtotal: f64 = item_rows
+        let sum_subtotal: rust_decimal::Decimal = item_rows
             .iter()
-            .map(|r| r.6.to_f64().unwrap_or_default())
+            .map(|r| r.6)
             .sum();
-        let faktor = if sum_subtotal > 0.0 {
-            (total / sum_subtotal).clamp(0.0, 1.0)
+        let faktor = if sum_subtotal > rust_decimal::Decimal::ZERO {
+            (total_dec / sum_subtotal).min(rust_decimal::Decimal::ONE)
         } else {
-            1.0
+            rust_decimal::Decimal::ONE
         };
 
-        let mut total_refund = 0.0;
-        let mut rencana: Vec<(i32, Option<i32>, String, String, i32, f64)> = Vec::new();
+        let mut total_refund = rust_decimal::Decimal::ZERO;
+        let mut rencana: Vec<(i32, Option<i32>, String, String, i32, rust_decimal::Decimal, rust_decimal::Decimal)> = Vec::new();
         for row in &item_rows {
             let Some(qty) = request_qty.get(&row.0).copied() else {
                 continue;
             };
-            let refunded = row.7.max(0) as i32;
+            let refunded = row.8.max(0) as i32;
             let sisa = row.4 - refunded;
             if qty > sisa {
                 return Err((
@@ -1347,42 +1421,44 @@ pub async fn refund_transaksi(
                     ),
                 ));
             }
-            let subtotal = row.6.to_f64().unwrap_or_default();
-            let nilai = hitung_nilai_refund(subtotal, row.4, qty, faktor);
-            if nilai <= 0.0 {
+            let nilai = hitung_nilai_refund(row.6, row.4, qty, faktor);
+            if nilai <= rust_decimal::Decimal::ZERO {
+                if row.3.eq_ignore_ascii_case("barang") && row.1.is_some() {
+                    rencana.push((row.0, row.1, row.2.clone(), row.3.clone(), qty, nilai, row.7));
+                }
                 continue;
             }
             total_refund += nilai;
-            rencana.push((row.0, row.1, row.2.clone(), row.3.clone(), qty, nilai));
+            rencana.push((row.0, row.1, row.2.clone(), row.3.clone(), qty, nilai, row.7));
         }
 
         if payload.void {
             let seluruh_sisa_terpilih = item_rows.iter().all(|row| {
-                let sisa = row.4 - row.7.max(0) as i32;
+                let sisa = row.4 - row.8.max(0) as i32;
                 sisa <= 0 || request_qty.get(&row.0).copied().unwrap_or(0) == sisa
             });
             if seluruh_sisa_terpilih {
-                total_refund = (total - already).max(0.0);
+                total_refund = (total_dec - already).max(rust_decimal::Decimal::ZERO);
             }
         }
-        total_refund = bulatkan_dua(total_refund);
-        if !refund_masih_boleh(total, already, total_refund) {
+        if !refund_masih_boleh(total_dec, already, total_refund) {
             return Err((
                 StatusCode::BAD_REQUEST,
                 "Total refund melebihi nilai transaksi yang belum direfund.".to_string(),
             ));
         }
 
-        let jumlah_dec = rust_decimal::Decimal::from_f64_retain(total_refund).unwrap_or_default();
+        let jumlah_dec = total_refund;
         let (refund_id, created_at): (i32, chrono::NaiveDateTime) = sqlx::query_as(
-            "INSERT INTO transaction_refunds
-             (transaction_id, owner_id, unit_id, jenis, status, alasan, jumlah, aktor_id, aktor)
-             VALUES ($1, $2, $3, $4, 'selesai', $5, $6, $7, $8)
+            "            INSERT INTO transaction_refunds
+             (transaction_id, owner_id, unit_id, idempotency_key, jenis, status, alasan, jumlah, aktor_id, aktor)
+             VALUES ($1, $2, $3, $4, $5, 'selesai', $6, $7, $8, $9)
              RETURNING id, created_at",
         )
         .bind(id as i32)
         .bind(claims.owner_id as i32)
         .bind(unit_id)
+        .bind(&idempotency_key)
         .bind(if payload.void { "void" } else { "refund" })
         .bind(&alasan)
         .bind(jumlah_dec)
@@ -1393,20 +1469,21 @@ pub async fn refund_transaksi(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
         let mut refund_items = Vec::new();
-        for (item_id, product_id, item_name, item_type, qty, nilai) in rencana {
-            let nilai_dec = rust_decimal::Decimal::from_f64_retain(nilai).unwrap_or_default();
+        for (item_id, product_id, item_name, item_type, qty, nilai, harga_beli) in rencana {
+            let nilai_dec = nilai;
             sqlx::query(
                 "INSERT INTO transaction_refund_items
-                 (refund_id, transaction_item_id, product_id, item_name, item_type, qty, jumlah)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                 (refund_id, transaction_item_id, product_id, item_name, item_type, harga_beli_saat_refund, qty, jumlah)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
             )
             .bind(refund_id)
             .bind(item_id)
-            .bind(product_id)
-            .bind(&item_name)
-            .bind(&item_type)
-            .bind(qty)
-            .bind(nilai_dec)
+                    .bind(product_id)
+                    .bind(&item_name)
+                    .bind(&item_type)
+                    .bind(harga_beli)
+                    .bind(qty)
+                    .bind(nilai_dec)
             .execute(&mut *tx)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -1448,7 +1525,7 @@ pub async fn refund_transaksi(
                 item_name,
                 item_type,
                 qty,
-                jumlah: nilai,
+                jumlah: nilai.to_f64().unwrap_or_default(),
             });
         }
 
@@ -1485,7 +1562,7 @@ pub async fn refund_transaksi(
             unit_id: unit_id as i64,
             jenis: if payload.void { "void" } else { "refund" }.to_string(),
             alasan,
-            jumlah: total_refund,
+            jumlah: total_refund.to_f64().unwrap_or_default(),
             aktor: claims.sub.clone(),
             created_at: created_at.format("%Y-%m-%d %H:%M").to_string(),
             items: refund_items,
@@ -2183,32 +2260,58 @@ pub async fn update_service_status(
 #[cfg(test)]
 mod refund_tests {
     use super::{hitung_nilai_refund, refund_masih_boleh};
+    use rust_decimal::Decimal;
+    use std::str::FromStr;
+
+    fn dec(value: &str) -> Decimal {
+        Decimal::from_str(value).expect("decimal valid")
+    }
 
     #[test]
     fn full_refund_matches_line_value() {
-        assert_eq!(hitung_nilai_refund(100_000.0, 2, 2, 1.0), 100_000.0);
-        assert_eq!(hitung_nilai_refund(100_000.0, 2, 2, 0.9), 90_000.0);
+        assert_eq!(
+            hitung_nilai_refund(dec("100000"), 2, 2, Decimal::ONE),
+            dec("100000.00")
+        );
+        assert_eq!(
+            hitung_nilai_refund(dec("100000"), 2, 2, dec("0.9")),
+            dec("90000.00")
+        );
     }
 
     #[test]
     fn partial_refund_is_rounded_to_two_decimals() {
-        assert_eq!(hitung_nilai_refund(10_000.0, 3, 1, 1.0), 3_333.33);
-        assert_eq!(hitung_nilai_refund(50_000.0, 2, 1, 1.0), 25_000.0);
+        assert_eq!(
+            hitung_nilai_refund(dec("10000"), 3, 1, Decimal::ONE),
+            dec("3333.33")
+        );
+        assert_eq!(
+            hitung_nilai_refund(dec("50000"), 2, 1, Decimal::ONE),
+            dec("25000.00")
+        );
     }
 
     #[test]
     fn invalid_or_zero_refund_returns_zero() {
-        assert_eq!(hitung_nilai_refund(10_000.0, 0, 1, 1.0), 0.0);
-        assert_eq!(hitung_nilai_refund(10_000.0, 2, 0, 1.0), 0.0);
-        assert_eq!(hitung_nilai_refund(0.0, 2, 1, 1.0), 0.0);
+        assert_eq!(
+            hitung_nilai_refund(dec("10000"), 0, 1, Decimal::ONE),
+            Decimal::ZERO
+        );
+        assert_eq!(
+            hitung_nilai_refund(dec("10000"), 2, 0, Decimal::ONE),
+            Decimal::ZERO
+        );
+        assert_eq!(
+            hitung_nilai_refund(Decimal::ZERO, 2, 1, Decimal::ONE),
+            Decimal::ZERO
+        );
     }
 
     #[test]
     fn cumulative_refund_cannot_exceed_transaction_total() {
-        assert!(refund_masih_boleh(100.0, 40.0, 60.0));
-        assert!(refund_masih_boleh(100.0, 40.0, 60.005));
-        assert!(!refund_masih_boleh(100.0, 40.0, 60.02));
-        assert!(!refund_masih_boleh(100.0, 100.0, 1.0));
-        assert!(!refund_masih_boleh(100.0, 0.0, 0.0));
+        assert!(refund_masih_boleh(dec("100"), dec("40"), dec("60")));
+        assert!(!refund_masih_boleh(dec("100"), dec("40"), dec("60.01")));
+        assert!(!refund_masih_boleh(dec("100"), dec("100"), dec("1")));
+        assert!(!refund_masih_boleh(dec("100"), dec("0"), Decimal::ZERO));
     }
 }

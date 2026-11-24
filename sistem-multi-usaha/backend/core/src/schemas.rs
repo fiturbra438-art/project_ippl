@@ -213,6 +213,7 @@ pub struct CreateTransaksiManualRequest {
 #[derive(Debug, Deserialize)]
 pub struct RefundTransaksiRequest {
     pub alasan: String,
+    pub idempotency_key: String,
     #[serde(default)]
     pub void: bool,
     #[serde(default)]

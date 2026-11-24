@@ -147,12 +147,14 @@ class TransaksiProvider extends ChangeNotifier {
     required String alasan,
     bool voidMode = false,
     Map<int, int> items = const {},
+    String? idempotencyKey,
   }) async {
     _lastError = null;
     try {
       final res = await ApiService.post('/transaksi/$id/refund', {
         'alasan': alasan,
         'void': voidMode,
+        'idempotency_key': idempotencyKey ?? '${id}_${DateTime.now().microsecondsSinceEpoch}',
         'items': items.entries
             .map((entry) => {'transaction_item_id': entry.key, 'qty': entry.value})
             .toList(),

@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS transaction_items (
     item_type VARCHAR(30) DEFAULT 'barang',
     qty INT NOT NULL DEFAULT 1,
     harga_satuan NUMERIC(14,2) NOT NULL,
+    harga_beli_saat_transaksi NUMERIC(14,2) NOT NULL DEFAULT 0,
     diskon NUMERIC(14,2) NOT NULL DEFAULT 0,
     subtotal NUMERIC(14,2) NOT NULL,
     rental_duration INT DEFAULT 1,
@@ -120,7 +121,9 @@ CREATE TABLE IF NOT EXISTS transaction_refunds (
     transaction_id INT NOT NULL REFERENCES transactions(id) ON DELETE RESTRICT,
     owner_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     unit_id INT NOT NULL REFERENCES business_units(id) ON DELETE CASCADE,
+    idempotency_key VARCHAR(80) NOT NULL,
     jenis VARCHAR(20) NOT NULL CHECK (jenis IN ('refund', 'void')),
+    UNIQUE (transaction_id, idempotency_key),
     status VARCHAR(20) NOT NULL DEFAULT 'selesai',
     alasan TEXT NOT NULL,
     jumlah NUMERIC(14,2) NOT NULL CHECK (jumlah > 0),
@@ -139,6 +142,7 @@ CREATE TABLE IF NOT EXISTS transaction_refund_items (
     product_id INT REFERENCES products(id) ON DELETE SET NULL,
     item_name VARCHAR(150) NOT NULL,
     item_type VARCHAR(30) NOT NULL,
+    harga_beli_saat_refund NUMERIC(14,2) NOT NULL DEFAULT 0,
     qty INT NOT NULL CHECK (qty > 0),
     jumlah NUMERIC(14,2) NOT NULL CHECK (jumlah > 0),
     UNIQUE (refund_id, transaction_item_id)
@@ -437,6 +441,7 @@ DECLARE
     v_prod_id INT;
     v_qty INT;
     v_harga NUMERIC(14,2);
+    v_harga_beli NUMERIC(14,2);
     v_diskon_item NUMERIC(14,2);
     v_subtotal NUMERIC(14,2);
     v_unit_ada BOOLEAN;
@@ -493,8 +498,9 @@ BEGIN
     LOOP
         v_prod_id := NULLIF(COALESCE((item->>'product_id')::INT, 0), 0);
         v_qty := COALESCE((item->>'qty')::INT, 1);
-        v_harga := (item->>'harga_satuan')::NUMERIC;
-        v_diskon_item := COALESCE((item->>'diskon')::NUMERIC, 0);
+         v_harga := (item->>'harga_satuan')::NUMERIC;
+         SELECT COALESCE(harga_beli, 0) INTO v_harga_beli FROM products WHERE id = v_prod_id;
+         v_diskon_item := COALESCE((item->>'diskon')::NUMERIC, 0);
         v_subtotal := GREATEST((v_harga * v_qty) - v_diskon_item, 0);
         v_tipe := COALESCE(item->>'tipe', 'barang');
         v_custom_nama := item->>'nama';
@@ -503,15 +509,16 @@ BEGIN
         v_catatan := item->>'catatan';
 
         INSERT INTO transaction_items (
-            trx_id, product_id, item_name, item_type, qty, harga_satuan, diskon, subtotal, rental_duration, duration_unit, notes, created_at
-        ) VALUES (
+             trx_id, product_id, item_name, item_type, qty, harga_satuan, harga_beli_saat_transaksi, diskon, subtotal, rental_duration, duration_unit, notes, created_at
+         ) VALUES (
             p_trx_id, 
             v_prod_id, 
             v_custom_nama, 
             v_tipe, 
-            v_qty, 
-            v_harga, 
-            v_diskon_item,
+             v_qty,
+             v_harga,
+             COALESCE(v_harga_beli, 0),
+             v_diskon_item,
             v_subtotal, 
             v_durasi, 
             v_unit_durasi, 

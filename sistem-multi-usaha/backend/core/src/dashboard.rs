@@ -368,7 +368,7 @@ pub async fn get_laporan_keuangan(
                         AND ($5::TEXT IS NULL OR t.metode_bayar = $5)
                         AND ($6::TEXT IS NULL OR t.status = $6)
                         AND ($7::INT[] IS NULL OR t.unit_id = ANY($7))), 0),
-            COALESCE((SELECT SUM(p.harga_beli * ri.qty)
+            COALESCE((SELECT SUM(ri.harga_beli_saat_refund * ri.qty)
                       FROM transaction_refund_items ri
                       JOIN transaction_refunds r ON r.id = ri.refund_id
                       JOIN transactions t ON t.id = r.transaction_id

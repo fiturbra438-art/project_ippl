@@ -72,6 +72,10 @@ impl AppState {
             .execute(&pool)
             .await
             .expect("Migrasi database gagal");
+        sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS harga_beli_saat_transaksi NUMERIC(14,2) NOT NULL DEFAULT 0")
+            .execute(&pool)
+            .await
+            .expect("Migrasi database gagal");
         sqlx::query("ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS diskon NUMERIC(14,2) NOT NULL DEFAULT 0")
             .execute(&pool)
             .await.expect("Migrasi database gagal");
@@ -227,6 +231,25 @@ impl AppState {
         .execute(&pool)
         .await
         .expect("Gagal memigrasikan tabel transaction_refunds");
+        sqlx::query(
+            "ALTER TABLE transaction_refund_items ADD COLUMN IF NOT EXISTS harga_beli_saat_refund NUMERIC(14,2) NOT NULL DEFAULT 0",
+        )
+        .execute(&pool)
+        .await
+        .expect("Gagal menambahkan HPP refund");
+        sqlx::query(
+            "ALTER TABLE transaction_refunds ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(80)",
+        )
+        .execute(&pool)
+        .await
+        .expect("Gagal menambahkan idempotency key refund");
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_transaction_refunds_idempotency
+             ON transaction_refunds(transaction_id, idempotency_key)",
+        )
+        .execute(&pool)
+        .await
+        .expect("Gagal membuat unique index idempotency refund");
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS ix_transaction_refunds_transaction
              ON transaction_refunds(transaction_id, created_at)",

@@ -277,6 +277,7 @@ class _TransaksiScreenState extends State<TransaksiScreen> {
     };
     var voidMode = false;
     var submitting = false;
+    final idempotencyKey = 'refund-${transaksi.id}-${DateTime.now().microsecondsSinceEpoch}';
     final currency = NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0);
 
     await showDialog<void>(
@@ -388,6 +389,7 @@ class _TransaksiScreenState extends State<TransaksiScreen> {
                         alasan: alasan,
                         voidMode: voidMode,
                         items: items,
+                        idempotencyKey: idempotencyKey,
                       );
                       if (!ctx.mounted) return;
                       setLocalState(() => submitting = false);
